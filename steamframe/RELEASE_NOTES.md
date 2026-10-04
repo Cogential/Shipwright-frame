@@ -24,7 +24,8 @@ x86_64 under `qemu-aarch64` with Mesa's software renderer, with an empty home fo
 - `run.sh` copied the ROM to `~/.local/share/soh`. The game detected the Frame, applied its
   defaults (controller nav, 150% UI, VSync, single viewport, 1920x1080 fullscreen), found the ROM,
   built `oot.o2r` with no prompts, loaded it, and showed the boot logo.
-- Second launch: with `oot.o2r` present, it started straight away.
+- Second launch: with `oot.o2r` present, it started straight away and played the title-screen intro
+  (Link riding through Hyrule Field).
 - With no ROM, it showed a "No ROM Found" message naming the folder, with the OK button focused for
   the controller.
 
