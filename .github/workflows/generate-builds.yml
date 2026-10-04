@@ -1,7 +1,8 @@
 name: generate-builds
+# Steam Frame fork: upstream's desktop builds only run on request, so pushes to this private repo
+# don't spend Actions minutes on macOS/Windows/Linux x64 builds. The Frame build is steam-frame.yml.
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
