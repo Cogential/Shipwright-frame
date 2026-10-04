@@ -15,17 +15,20 @@ OUT="$(realpath -m "${2:-$PWD/soh-steam-frame-arm64.zip}")"
 NAME=soh-steam-frame
 
 # Libraries SteamOS lacks: bundle these.
-BUNDLE='^lib(SDL2-2\.0|SDL2_net-2\.0|zip|tinyxml2|spdlog|fmt|opusfile|opus|usb-1\.0|GLEW)\.so'
+BUNDLE='^lib(SDL2-2\.0|SDL2_net-2\.0|zip|tinyxml2|spdlog|fmt|opusfile|opus|samplerate|usb-1\.0|GLEW)\.so'
 # Libraries the Frame provides. Never bundle glibc, libstdc++/libgcc_s or graphics/windowing
 # libraries: SteamOS's are newer and Mesa needs its own.
-SYSTEM='^(ld-linux.*|lib(c|m|dl|pthread|rt|mvec|stdc\+\+|gcc_s|GL|GLX|GLdispatch|OpenGL|EGL|GLESv2|vulkan|X11|X11-xcb|Xext|Xi|Xrandr|Xcursor|Xfixes|Xss|Xxf86vm|xcb|wayland-.*|decor-0|drm|gbm|z|bz2|png16|ogg|vorbis|vorbisfile|vorbisenc|pulse|pulse-simple|asound|crypto|ssl|lzma|zstd|lz4|udev|dbus-1|systemd|cap|gcrypt|gpg-error))\.so'
+SYSTEM='^(ld-linux.*|lib(c|m|dl|pthread|rt|mvec|stdc\+\+|gcc_s|GL|GLX|GLdispatch|OpenGL|EGL|GLESv2|vulkan|X11|X11-xcb|Xext|Xi|Xrandr|Xcursor|Xfixes|Xss|Xxf86vm|xcb|wayland-.*|xkbcommon|decor-0|drm|gbm|z|bz2|png16|ogg|vorbis|vorbisfile|vorbisenc|pulse|pulse-simple|asound|crypto|ssl|lzma|zstd|lz4|udev|dbus-1|systemd|cap|gcrypt|gpg-error))\.so'
 
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 APP="$STAGE/$NAME"
 
 cmake --install "$BUILD" --prefix "$APP" --component ship >/dev/null
+# On Linux the extractor configuration (assets/) is its own component; the in-game ROM extraction needs it.
+cmake --install "$BUILD" --prefix "$APP" --component extractor >/dev/null
 [[ -f "$APP/soh.elf" ]] || { echo "error: soh.elf missing from the install" >&2; exit 1; }
+[[ -d "$APP/assets/xml" ]] || { echo "error: extractor assets missing from the install" >&2; exit 1; }
 [[ -f "$APP/soh.o2r" ]] || { echo "error: soh.o2r missing; build the GenerateSohOtr target first" >&2; exit 1; }
 # Never package a ROM or anything built from one.
 find "$APP" \( -iname '*.z64' -o -iname '*.n64' -o -iname '*.v64' -o -name 'oot.o2r' -o -name 'oot-mq.o2r' \) -delete
