@@ -16,7 +16,7 @@ Time ROM: no ROM or ROM-derived files are in this repository or its releases.
 | CI | `.github/workflows/steam-frame.yml` builds on GitHub's `ubuntu-22.04-arm` runner and publishes releases. Upstream's desktop `generate-builds` only runs on request |
 | Runtime | `soh/soh/SteamFrame/` detects the Frame at launch and fills in headset-friendly defaults |
 | First launch | On the Frame, ROMs in the data folder are processed with no prompts, and if none is there a message says where to put it. Pop-ups can be answered with the controller |
-| Fixes | Linux ROM search looked in the working directory instead of the data folder, and outdated archives were only deleted from the working directory. Both matter when `SHIP_HOME` is set |
+| Fixes | Linux ROM search looked in the working directory instead of the data folder, and outdated archives were only deleted from the working directory. Both matter when `SHIP_HOME` is set. The menu now sees controllers that connect after launch, and the Frame defaults are saved before SoH's config migrations reload settings from disk; both stopped View from opening the menu |
 
 ### Steam Frame behaviour
 
