@@ -1,0 +1,148 @@
+name: steam-frame
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Publish the build as a GitHub pre-release with this tag (e.g. frame-v0.1.0). Leave empty to only build.
+        required: false
+        default: ""
+concurrency:
+  # Keyed on the event too, so a branch push never cancels a manual release run.
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+jobs:
+
+  # Native aarch64 Linux build for the Steam Frame. Runs on GitHub's Arm runner so nothing is
+  # cross-compiled; soh.o2r is architecture independent and is built in the same job.
+  build-steam-frame:
+    runs-on: ubuntu-22.04-arm
+    permissions:
+      contents: write
+    steps:
+    - name: Git Checkout
+      uses: actions/checkout@v6
+      with:
+        submodules: true
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y $(cat .github/workflows/apt-deps.txt) libzip-dev zipcmp zipmerge ziptool gcc-12 g++-12 libfuse2 patchelf zip
+    - name: Configure ccache
+      uses: hendrikmuhs/ccache-action@v1.2
+      with:
+        save: ${{ github.ref_name == github.event.repository.default_branch }}
+        key: ${{ runner.os }}-arm64-ccache-${{ github.ref }}-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-arm64-ccache-${{ github.ref }}
+          ${{ runner.os }}-arm64-ccache
+    - name: Restore Cached deps folder
+      id: restore-cache-deps
+      uses: actions/cache/restore@v5
+      with:
+        key: ${{ runner.os }}-arm64-deps-${{ github.ref }}-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-arm64-deps-${{ github.ref }}-
+          ${{ runner.os }}-arm64-deps-
+        path: deps
+    - name: Create deps folder
+      run: mkdir -p deps
+    - name: Install latest SDL
+      run: |
+        export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
+        if [ ! -d "deps/SDL2-2.30.3" ]; then
+          wget https://github.com/libsdl-org/SDL/releases/download/release-2.30.3/SDL2-2.30.3.tar.gz
+          tar -xzf SDL2-2.30.3.tar.gz -C deps
+        fi
+        cd deps/SDL2-2.30.3
+        ./configure --enable-hidapi-libusb
+        make -j 4
+        sudo make install
+        sudo cp -av /usr/local/lib/libSDL* /lib/aarch64-linux-gnu/
+    - name: Install latest SDL_net
+      run: |
+        export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
+        if [ ! -d "deps/SDL2_net-2.2.0" ]; then
+          wget https://www.libsdl.org/projects/SDL_net/release/SDL2_net-2.2.0.tar.gz
+          tar -xzf SDL2_net-2.2.0.tar.gz -C deps
+        fi
+        cd deps/SDL2_net-2.2.0
+        ./configure
+        make -j 4
+        sudo make install
+        sudo cp -av /usr/local/lib/libSDL* /lib/aarch64-linux-gnu/
+    - name: Install latest tinyxml2
+      run: |
+        sudo apt-get remove libtinyxml2-dev
+        export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
+        if [ ! -d "deps/tinyxml2-10.0.0" ]; then
+          wget https://github.com/leethomason/tinyxml2/archive/refs/tags/10.0.0.tar.gz
+          tar -xzf 10.0.0.tar.gz -C deps
+        fi
+        cd deps/tinyxml2-10.0.0
+        mkdir -p build
+        cd build
+        cmake ..
+        make
+        sudo make install
+    - name: Install libzip without crypto
+      run: |
+        export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
+        if [ ! -d "deps/libzip-1.10.1" ]; then
+          wget https://github.com/nih-at/libzip/releases/download/v1.10.1/libzip-1.10.1.tar.gz
+          tar -xzf libzip-1.10.1.tar.gz -C deps
+        fi
+        cd deps/libzip-1.10.1
+        mkdir -p build
+        cd build
+        cmake .. -DENABLE_COMMONCRYPTO=OFF -DENABLE_GNUTLS=OFF -DENABLE_MBEDTLS=OFF -DENABLE_OPENSSL=OFF
+        make
+        sudo make install
+        sudo cp -av /usr/local/lib/libzip* /lib/aarch64-linux-gnu/
+    - name: Build SoH for Steam Frame
+      run: |
+        export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
+        # Text-to-speech is left out: the Frame has no eSpeak or voice data.
+        cmake --no-warn-unused-cli -H. -Bbuild-cmake -GNinja -DCMAKE_BUILD_TYPE:STRING=Release -DBUILD_REMOTE_CONTROL=1 -DSTEAM_FRAME=ON -DESPEAK=ESPEAK-NOTFOUND
+        cmake --build build-cmake --config Release --target GenerateSohOtr -j4
+        cmake --build build-cmake --config Release -j4
+      env:
+        CC: gcc-12
+        CXX: g++-12
+    - name: Package Steam Frame zip
+      run: steamframe/package-steam-frame.sh build-cmake soh-steam-frame-arm64.zip
+    - name: Package AppImage
+      run: |
+        (cd build-cmake && cpack -G External)
+        mv build-cmake/*.appimage soh-steam-frame-arm64.appimage
+        cp docs/STEAM_FRAME.md steam-frame.txt
+    - name: Upload build
+      uses: actions/upload-artifact@v7
+      with:
+        name: soh-steam-frame-arm64
+        path: |
+          soh-steam-frame-arm64.zip
+          soh-steam-frame-arm64.appimage
+          steam-frame.txt
+    # Pushing a frame-v* tag, or running the workflow manually with release_tag set, publishes the
+    # build as a GitHub pre-release. A manual run creates the tag on the commit it built.
+    - name: Publish release
+      if: startsWith(github.ref, 'refs/tags/frame-v') || inputs.release_tag != ''
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ inputs.release_tag || github.ref_name }}
+        target_commitish: ${{ github.sha }}
+        name: Steam Frame ${{ inputs.release_tag || github.ref_name }}
+        body_path: steamframe/RELEASE_NOTES.md
+        prerelease: true
+        files: |
+          soh-steam-frame-arm64.zip
+          soh-steam-frame-arm64.appimage
+          steam-frame.txt
+    - name: Save Cache deps folder
+      if: ${{ github.ref_name == github.event.repository.default_branch }}
+      uses: actions/cache/save@v5
+      with:
+        key: ${{ steps.restore-cache-deps.outputs.cache-primary-key }}
+        path: deps

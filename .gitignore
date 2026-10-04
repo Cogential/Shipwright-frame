@@ -460,3 +460,10 @@ soh/properties.h
 /clang-format
 /clang-format.exe
 *.o2r
+
+# Personal game files: never commit ROMs or bundles built from them (*.o2r is ignored above)
+*.z64
+*.n64
+*.v64
+soh-frame-bundle*/
+soh-frame-bundle*.tar.gz

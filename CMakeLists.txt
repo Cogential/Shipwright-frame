@@ -14,6 +14,10 @@ set(SPDLOG_LEVEL_OFF 6)
 set(SPDLOG_MIN_CUTOFF SPDLOG_LEVEL_TRACE CACHE STRING "cutoff at trace")
 
 option(SUPPRESS_WARNINGS "Suppress warnings in LUS and src (decomp)" ON)
+
+# Steam Frame (aarch64 SteamOS) build: tunes code generation for its Snapdragon 8 Gen 3. The
+# runtime Frame support in soh/soh/SteamFrame is detected at launch and does not depend on this.
+option(STEAM_FRAME "Tune the build for the Steam Frame (aarch64 Linux)" OFF)
 if(SUPPRESS_WARNINGS)
     MESSAGE("Suppressing warnings in LUS and src")
     if(MSVC)

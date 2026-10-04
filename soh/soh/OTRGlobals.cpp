@@ -47,6 +47,7 @@
 #if not defined(__SWITCH__) && not defined(__WIIU__)
 #include "Extractor/Extract.h"
 #endif
+#include "SteamFrame/SteamFrame.h"
 
 #include <fast/interpreter.h>
 
@@ -278,6 +279,7 @@ OTRGlobals::OTRGlobals() {
 
     context->InitConfiguration();
     context->InitConsoleVariables();
+    SteamFrame::ApplyDefaults();
 
     auto controlDeck = std::make_shared<LUS::ControlDeck>(std::vector<CONTROLLERBUTTONS_T>({
         BTN_CUSTOM_MODIFIER1,
@@ -441,6 +443,9 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
                               "now be redirected to re-extract them.");
         std::filesystem::remove("oot.o2r");
         std::filesystem::remove("oot-mq.o2r");
+        // The archives live in the data folder, which isn't the working directory when SHIP_HOME is set.
+        std::filesystem::remove(Ship::Context::GetPathRelativeToAppDirectory("oot.o2r", appShortName));
+        std::filesystem::remove(Ship::Context::GetPathRelativeToAppDirectory("oot-mq.o2r", appShortName));
     }
 
     std::shared_ptr<BS::thread_pool> threadPool = std::make_shared<BS::thread_pool>(1);
@@ -559,6 +564,11 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
             case ES_EXTRACT_ARGS: {
 #if !defined(__SWITCH__) && !defined(__WIIU__)
                 if (args.empty()) {
+                    if (SteamFrame::IsSteamFrame()) {
+                        // No prompts on the Frame: start the game once the ROMs are processed.
+                        extractStep = ES_VERIFY;
+                        break;
+                    }
                     SohGui::RegisterPopup(
                         "Run Ship of Harkinian", "All files have been processed. Run SoH?", "Yes", "No",
                         [&]() {
@@ -581,7 +591,11 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
                 if (extract.RunFileStandalone(file)) {
                     bool doExtract = true;
                     std::string archive = (extract.IsMasterQuest() ? "oot-mq.o2r" : "oot.o2r");
-                    if (std::filesystem::exists(Ship::Context::GetAppDirectoryPath(appShortName) + "/" + archive)) {
+                    if (SteamFrame::IsSteamFrame() &&
+                        std::filesystem::exists(Ship::Context::GetAppDirectoryPath(appShortName) + "/" + archive)) {
+                        SPDLOG_INFO("{} already exists, skipping {}", archive, file);
+                    } else if (std::filesystem::exists(Ship::Context::GetAppDirectoryPath(appShortName) + "/" +
+                                                       archive)) {
                         std::string msg = "Archive for current ROM, " + archive + ", already exists.\nExtract again?";
                         SohGui::RegisterPopup("Confirm Re-extract", msg.c_str(), "Yes", "No", [&]() {
                             extractionTask = threadPool->submit_task([&]() -> void {
@@ -615,7 +629,9 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
                                 Ship::Context::LocateFileAcrossAppDirs("oot-mq.o2r", appShortName)) ||
                             std::filesystem::exists(Ship::Context::LocateFileAcrossAppDirs("oot.o2r", appShortName));
 
-                        if (!ootO2RExists) {
+                        if (!ootO2RExists && SteamFrame::IsSteamFrame()) {
+                            promptStep = PS_LOCAL;
+                        } else if (!ootO2RExists) {
                             SohGui::RegisterPopup(
                                 "No O2R Files", "No O2R files found. Generate one now?", "Yes", "No",
                                 [&]() { promptStep = PS_LOCAL; }, [&]() { exit(0); });
@@ -630,7 +646,22 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
                         extract.GetRoms(args);
                         extract.SetSearchPath(dataPath);
                         extract.GetRoms(args);
-                        if (!args.empty()) {
+                        // The install and data folders are the same in a portable install.
+                        for (auto& rom : args) {
+                            rom = std::filesystem::weakly_canonical(rom).string();
+                        }
+                        std::sort(args.begin(), args.end());
+                        args.erase(std::unique(args.begin(), args.end()), args.end());
+                        if (!args.empty() && SteamFrame::IsSteamFrame()) {
+                            extractStep = ES_EXTRACT_ARGS;
+                        } else if (SteamFrame::IsSteamFrame()) {
+                            // There are no file dialogs on the Frame, so say where the ROM goes.
+                            std::string msg = "No Ocarina of Time ROM found.\n\nCopy your ROM (.z64) to\n" +
+                                              std::filesystem::absolute(dataPath).string() +
+                                              "\nand start Ship of Harkinian again.";
+                            promptStep = PS_WAIT;
+                            SohGui::RegisterPopup("No ROM Found", msg, "OK", "", [&]() { exit(0); });
+                        } else if (!args.empty()) {
                             promptStep = PS_WAIT;
                             SohGui::RegisterPopup(
                                 "ROMs found", "ROMs found in application directory. Would you like to process them?",

@@ -7,6 +7,7 @@
 #include "UIWidgets.hpp"
 #include "SohGui.hpp"
 #include "soh/OTRGlobals.h"
+#include "soh/SteamFrame/SteamFrame.h"
 #include "z64.h"
 
 extern "C" PlayState* gPlayState;
@@ -32,6 +33,22 @@ void SohModalWindow::Draw() {
 }
 
 void SohModalWindow::DrawElement() {
+    // The Frame has no mouse or keyboard, so popups must be answerable with the controller even
+    // when the menu, which normally gates controller navigation, is closed.
+    static bool sForcedGamepadNav = false;
+    if (SteamFrame::IsSteamFrame()) {
+        if (!modals.empty()) {
+            ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+            sForcedGamepadNav = true;
+        } else if (sForcedGamepadNav) {
+            // Back to libultraship's rule: controller navigation only while the menu is open.
+            auto gui = Ship::Context::GetInstance()->GetWindow()->GetGui();
+            gui->BlockGamepadNavigation();
+            gui->UnblockGamepadNavigation();
+            sForcedGamepadNav = false;
+        }
+    }
+
     if (modals.size() > 0) {
         SohModal curModal = modals.at(0);
         if (!ImGui::IsPopupOpen(curModal.title_.c_str())) {
@@ -49,7 +66,10 @@ void SohModalWindow::DrawElement() {
                                        ImGuiWindowFlags_NoSavedSettings)) {
             ImGui::Text("%s", curModal.message_.c_str());
             UIWidgets::PushStyleButton(THEME_COLOR);
-            if (ImGui::Button(curModal.button1_.c_str())) {
+            const bool button1Pressed = ImGui::Button(curModal.button1_.c_str());
+            // Start controller navigation on the first button so A answers the popup straight away.
+            ImGui::SetItemDefaultFocus();
+            if (button1Pressed) {
                 if (curModal.button1callback_ != nullptr) {
                     curModal.button1callback_();
                 }

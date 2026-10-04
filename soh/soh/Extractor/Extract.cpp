@@ -253,20 +253,22 @@ void Extractor::GetRoms(std::vector<std::string>& roms) {
         // Go through each file in the directory
         while ((dir = readdir(d)) != NULL) {
             struct stat path;
+            // Entries are relative to the search path, which isn't necessarily the working directory
+            // (e.g. the data folder when SHIP_HOME is set).
+            const std::string fullPath = mSearchPath + "/" + dir->d_name;
 
             // Check if current entry is not folder
-            stat(dir->d_name, &path);
-            if (S_ISREG(path.st_mode)) {
+            if (stat(fullPath.c_str(), &path) == 0 && S_ISREG(path.st_mode)) {
 
                 // Get the position of the extension character.
                 char* ext = strrchr(dir->d_name, '.');
                 if (ext != NULL && (strcmp(ext, ".z64") == 0 || strcmp(ext, ".n64") == 0 || strcmp(ext, ".v64") == 0)) {
-                    roms.push_back(dir->d_name);
+                    roms.push_back(fullPath);
                 }
             }
         }
+        closedir(d);
     }
-    closedir(d);
 #else
     for (const auto& file : std::filesystem::directory_iterator(mSearchPath)) {
         if (file.is_directory())
