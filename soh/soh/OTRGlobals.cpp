@@ -48,13 +48,16 @@
 #include "Extractor/Extract.h"
 #endif
 #include "SteamFrame/SteamFrame.h"
+#include <imgui_impl_sdl2.h>
 
 #include <fast/interpreter.h>
 
 #ifdef __APPLE__
 #include <SDL_scancode.h>
+#include <SDL_events.h>
 #else
 #include <SDL2/SDL_scancode.h>
+#include <SDL2/SDL_events.h>
 #endif
 
 #ifdef __SWITCH__
@@ -268,6 +271,17 @@ static bool VerifyArchiveVersion(OTRVersion version);
 std::string portArchivePath = "";
 static bool sohArchiveVersionMatch = false;
 
+// SDL event watch: hands controller add/remove events to ImGui, which only uses them to rescan its
+// controller list, before libultraship takes them off the queue.
+static int ForwardControllerDeviceEventsToImGui(void* userdata, SDL_Event* event) {
+    const bool imguiBackendUp =
+        ImGui::GetCurrentContext() != nullptr && ImGui::GetIO().BackendPlatformUserData != nullptr;
+    if (imguiBackendUp && (event->type == SDL_CONTROLLERDEVICEADDED || event->type == SDL_CONTROLLERDEVICEREMOVED)) {
+        ImGui_ImplSDL2_ProcessEvent(event);
+    }
+    return 0;
+}
+
 OTRGlobals::OTRGlobals() {
     context = Ship::Context::CreateUninitializedInstance("Ship of Harkinian", appShortName, "shipofharkinian.json");
 
@@ -302,6 +316,17 @@ OTRGlobals::OTRGlobals() {
     sohFast3dWindow =
         std::make_shared<Fast::Fast3dWindow>(std::vector<std::shared_ptr<Ship::GuiWindow>>({ sohInputEditorWindow }));
     context->InitWindow(sohFast3dWindow);
+
+    // Let the menu (ImGui) see every connected controller, including ones that connect after
+    // startup. This libultraship consumes controller add/remove events before ImGui sees them, so
+    // ImGui kept the controller list it found at launch and View couldn't open the menu with a
+    // controller that connected later, as on the Steam Frame. Newer libultraship does this itself
+    // (libultraship#1112); this one predates it.
+    const Ship::WindowBackend backend = context->GetWindow()->GetWindowBackend();
+    if (backend == Ship::WindowBackend::FAST3D_SDL_OPENGL || backend == Ship::WindowBackend::FAST3D_SDL_METAL) {
+        ImGui_ImplSDL2_SetGamepadMode(ImGui_ImplSDL2_GamepadMode_AutoAll, nullptr, 0);
+        SDL_AddEventWatch(ForwardControllerDeviceEventsToImGui, nullptr);
+    }
 
     SohGui::SetupMenu();
 

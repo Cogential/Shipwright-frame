@@ -72,6 +72,9 @@ void ApplyDefaults() {
     // Menu text is read from a virtual screen a few metres away; default to the 150% UI scale.
     CVarRegisterInteger(CVAR_SETTING("ImGuiScale"), 2);
     CVarRegisterInteger(CVAR_VSYNC_ENABLED, 1);
+    // Save them now: on a fresh config SoH's config migrations call CVarClearBlock(), which reloads
+    // every CVar from the file and would drop these before the game starts.
+    CVarSave();
 
     // libultraship only goes fullscreen by itself on VARIANT_ID=steamdeck; otherwise it opens a
     // 640x480 window that gamescope stretches, which makes the menu enormous.

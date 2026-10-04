@@ -2,6 +2,23 @@
 
 No ROM or ROM-derived files are included. You need your own Ocarina of Time ROM.
 
+### Fixes in frame-v0.1.1
+- **View didn't open the settings menu.** Two causes, both fixed:
+  - The Frame defaults (controller menu navigation, 150% UI, VSync, single viewport) were only held
+    in memory. On a fresh config, SoH's config migrations reload every setting from disk, so they
+    were dropped before the game started and controller navigation stayed off. They're now saved
+    straight away.
+  - This version of libultraship never told the menu about controllers that connect after launch,
+    so the menu only listened to the controllers present at startup. It now sees every controller,
+    including ones that connect or reconnect later.
+- **Frame detection inside Steam Linux Runtime** and the **fullscreen default** fixes from the 2S2H
+  port were already in v0.1.0.
+
+Tested for v0.1.1 in the cloud: with two virtual controllers plugged in after launch, pressing View on
+the second one opens the settings menu, both natively (x86_64) and in the packaged ARM64 zip under
+emulation. Without either fix it doesn't. The settings now persist: controller navigation, 150% UI,
+VSync, single viewport.
+
 ### Install
 1. Unzip `soh-steam-frame-arm64.zip` and copy the `soh-steam-frame` folder to the Frame, e.g.
    `~/devkit-game/soh/`.
@@ -30,8 +47,8 @@ x86_64 under `qemu-aarch64` with Mesa's software renderer, with an empty home fo
   the controller.
 
 ### Not tested yet
-- Anything on the Frame itself: performance, Zink/Turnip rendering, controller input (no gamepad
-  was available in the cloud), and running inside Steam Linux Runtime 4.
+- Anything on the Frame itself: performance, Zink/Turnip rendering, real controllers (the cloud
+  tests used SDL virtual controllers), and running inside Steam Linux Runtime 4.
 - Whether every library SteamOS is expected to provide is actually present in the runtime. The
   bundled ones are in `lib/`.
 - Text-to-speech isn't included (no eSpeak on the Frame).
