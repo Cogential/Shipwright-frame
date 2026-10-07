@@ -16,7 +16,7 @@ Time ROM: no ROM or ROM-derived files are in this repository or its releases.
 | CI | `.github/workflows/steam-frame.yml` builds on GitHub's `ubuntu-22.04-arm` runner and publishes releases. Upstream's desktop `generate-builds` only runs on request |
 | Runtime | `soh/soh/SteamFrame/` detects the Frame at launch and fills in headset-friendly defaults |
 | First launch | On the Frame, ROMs in the data folder are processed with no prompts, and if none is there a message says where to put it. Pop-ups can be answered with the controller |
-| Fixes | Linux ROM search looked in the working directory instead of the data folder, and outdated archives were only deleted from the working directory. Both matter when `SHIP_HOME` is set. The menu now sees controllers that connect after launch, and the Frame defaults are saved before SoH's config migrations reload settings from disk; both stopped View from opening the menu |
+| Fixes | Linux ROM search looked in the working directory instead of the data folder, and outdated archives were only deleted from the working directory. Both matter when `SHIP_HOME` is set. The Frame defaults are saved before SoH's config migrations reload settings from disk, which otherwise turned controller menu navigation back off |
 
 ### Steam Frame behaviour
 
@@ -35,9 +35,7 @@ These defaults are filled in only for settings you haven't already changed:
 | VSync | On | Avoids tearing |
 | Fullscreen | On, 1920x1080 backbuffer | libultraship only goes fullscreen by itself on `VARIANT_ID=steamdeck`; otherwise gamescope stretches a 640x480 window |
 
-On the Frame, pop-ups also switch on controller navigation while they're showing and focus their
-first button, so **A** answers them. Upstream only allows controller navigation while the menu is
-open.
+Pop-ups focus their first button, so **A** answers them.
 
 Text-to-speech (eSpeak) isn't included in the Frame build: the Frame has no eSpeak library or voice
 data.
@@ -114,6 +112,6 @@ With `qemu-user` installed you can smoke-test the arm64 binary on the host:
 
 ## Releases
 
-Run the **steam-frame** workflow by hand with `release_tag` set (e.g. `frame-v0.1.1`), or push a
+Run the **steam-frame** workflow by hand with `release_tag` set (e.g. `frame-v0.2.0`), or push a
 `frame-v*` tag. It publishes a pre-release with `soh-steam-frame-arm64.zip`, the AppImage and these
 notes.
