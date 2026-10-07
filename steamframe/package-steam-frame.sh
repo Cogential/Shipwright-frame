@@ -24,11 +24,11 @@ STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 APP="$STAGE/$NAME"
 
+# The ship component holds the game, soh.o2r and assets/ (Torch's asset definitions, which the in-game
+# ROM extraction reads).
 cmake --install "$BUILD" --prefix "$APP" --component ship >/dev/null
-# On Linux the extractor configuration (assets/) is its own component; the in-game ROM extraction needs it.
-cmake --install "$BUILD" --prefix "$APP" --component extractor >/dev/null
 [[ -f "$APP/soh.elf" ]] || { echo "error: soh.elf missing from the install" >&2; exit 1; }
-[[ -d "$APP/assets/xml" ]] || { echo "error: extractor assets missing from the install" >&2; exit 1; }
+[[ -f "$APP/assets/config.yml" ]] || { echo "error: extractor assets (assets/config.yml) missing from the install" >&2; exit 1; }
 [[ -f "$APP/soh.o2r" ]] || { echo "error: soh.o2r missing; build the GenerateSohOtr target first" >&2; exit 1; }
 # Never package a ROM or anything built from one.
 find "$APP" \( -iname '*.z64' -o -iname '*.n64' -o -iname '*.v64' -o -name 'oot.o2r' -o -name 'oot-mq.o2r' \) -delete

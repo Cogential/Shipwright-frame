@@ -79,7 +79,7 @@ void ApplyDefaults() {
     // libultraship only goes fullscreen by itself on VARIANT_ID=steamdeck; otherwise it opens a
     // 640x480 window that gamescope stretches, which makes the menu enormous.
     // Config::Contains() can't be used here: for a missing nested key it finds the nearest parent.
-    auto config = Ship::Context::GetInstance()->GetConfig();
+    auto config = Ship::Context::GetRawInstance()->GetConfig();
     const bool fullscreenSet =
         config->GetBool("Window.Fullscreen.Enabled", false) == config->GetBool("Window.Fullscreen.Enabled", true);
     if (!fullscreenSet) {

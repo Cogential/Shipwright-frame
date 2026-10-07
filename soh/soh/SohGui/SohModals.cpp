@@ -1,14 +1,10 @@
 #include "SohModals.h"
 #include <imgui.h>
+#include <ship/window/Window.h>
 #include <vector>
 #include <string>
-#include <libultraship/bridge.h>
-#include <libultraship/libultraship.h>
 #include "UIWidgets.hpp"
 #include "SohGui.hpp"
-#include "soh/OTRGlobals.h"
-#include "soh/SteamFrame/SteamFrame.h"
-#include "z64.h"
 
 extern "C" PlayState* gPlayState;
 struct SohModal {
@@ -33,22 +29,6 @@ void SohModalWindow::Draw() {
 }
 
 void SohModalWindow::DrawElement() {
-    // The Frame has no mouse or keyboard, so popups must be answerable with the controller even
-    // when the menu, which normally gates controller navigation, is closed.
-    static bool sForcedGamepadNav = false;
-    if (SteamFrame::IsSteamFrame()) {
-        if (!modals.empty()) {
-            ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
-            sForcedGamepadNav = true;
-        } else if (sForcedGamepadNav) {
-            // Back to libultraship's rule: controller navigation only while the menu is open.
-            auto gui = Ship::Context::GetInstance()->GetWindow()->GetGui();
-            gui->BlockGamepadNavigation();
-            gui->UnblockGamepadNavigation();
-            sForcedGamepadNav = false;
-        }
-    }
-
     if (modals.size() > 0) {
         SohModal curModal = modals.at(0);
         if (!ImGui::IsPopupOpen(curModal.title_.c_str())) {
