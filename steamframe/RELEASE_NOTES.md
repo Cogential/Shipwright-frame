@@ -1,27 +1,24 @@
-**Test build: native ARM64 Linux build of Ship of Harkinian 9.2.3 "Ackbar Delta" for the Steam Frame.**
+**Test build: native ARM64 Linux build of Ship of Harkinian 9.3.0 "Dewey Alfa" for the Steam Frame.**
 
 No ROM or ROM-derived files are included. You need your own Ocarina of Time ROM.
 
-### Fixes in frame-v0.1.1
-- **View didn't open the settings menu.** Two causes, both fixed:
-  - The Frame defaults (controller menu navigation, 150% UI, VSync, single viewport) were only held
-    in memory. On a fresh config, SoH's config migrations reload every setting from disk, so they
-    were dropped before the game started and controller navigation stayed off. They're now saved
-    straight away.
-  - This version of libultraship never told the menu about controllers that connect after launch,
-    so the menu only listened to the controllers present at startup. It now sees every controller,
-    including ones that connect or reconnect later.
-- **Frame detection inside Steam Linux Runtime** and the **fullscreen default** fixes from the 2S2H
-  port were already in v0.1.0.
-
-Tested for v0.1.1 in the cloud: with two virtual controllers plugged in after launch, pressing View on
-the second one opens the settings menu, both natively (x86_64) and in the packaged ARM64 zip under
-emulation. Without either fix it doesn't. The settings now persist: controller navigation, 150% UI,
-VSync, single viewport.
+### New in frame-v0.2.0
+- **Updated to Ship of Harkinian 9.3.0.** See upstream's
+  [9.3.0 release notes](https://github.com/HarbourMasters/Shipwright/releases/tag/9.3.0) for the
+  game changes.
+- **Updating keeps your `oot.o2r`, saves and settings.** 9.3.0 extracts the ROM with a new tool
+  (Torch), but it still accepts the `oot.o2r` that v0.1.x made, so there's no new extraction step.
+  The two contain the same files and differ only in padding bytes. To rebuild it anyway, delete
+  `~/.local/share/soh/oot.o2r` and keep your ROM next to `run.sh`.
+- The Frame changes are carried over from v0.1.1: Frame detection, the defaults (View opens the
+  menu, 150% UI, VSync, single viewport, 1920x1080 fullscreen), and first-launch ROM processing
+  with no prompts. 9.3.0's libultraship now handles controllers that connect after launch itself,
+  so the Frame's own workaround for that was removed.
 
 ### Install
 1. Unzip `soh-steam-frame-arm64.zip` and copy the `soh-steam-frame` folder to the Frame, e.g.
-   `~/devkit-game/soh/`.
+   `~/devkit-game/soh/`. When updating, replace the old folder's contents: `soh.o2r` and `assets/`
+   must come from this release.
 2. Put your ROM (`.z64`) in that folder, or in `~/.local/share/soh/`.
 3. Register **`run.sh`** with Steam (`steam-client-create-shortcut`, FrameDrop, or *Add a
    Non-Steam Game*). Start `run.sh`, not `soh.elf`.
@@ -35,22 +32,22 @@ The AppImage is also attached for desktop Arm Linux. Inside Steam Linux Runtime 
 the zip.
 
 ### What was tested
-Not yet on a real Steam Frame. In the cloud, the packaged zip was run through its own `run.sh` on
-x86_64 under `qemu-aarch64` with Mesa's software renderer, with an empty home folder and the NTSC
-1.0 (US) ROM next to `run.sh`:
-- `run.sh` copied the ROM to `~/.local/share/soh`. The game detected the Frame, applied its
-  defaults (controller nav, 150% UI, VSync, single viewport, 1920x1080 fullscreen), found the ROM,
-  built `oot.o2r` with no prompts, loaded it, and showed the boot logo.
-- Second launch: with `oot.o2r` present, it started straight away and played the title-screen intro
-  (Link riding through Hyrule Field).
-- With no ROM, it showed a "No ROM Found" message naming the folder, with the OK button focused for
-  the controller.
+Not yet on a real Steam Frame. In the cloud, the packaged ARM64 zip was run through its own
+`run.sh` on x86_64 under `qemu-aarch64` with Mesa's software renderer:
+- **Fresh install** (empty home folder, NTSC 1.0 US ROM next to `run.sh`): `run.sh` copied the ROM
+  to `~/.local/share/soh`. The game detected the Frame, saved its defaults, found the ROM, built
+  `oot.o2r` with Torch and no prompts (about 5.5 minutes under emulation; it will be quicker on
+  the Frame), then started 9.3.0 fullscreen at 1920x1080 and showed the boot logos.
+- **Update from v0.1.1** (the v0.1.1 settings and its 9.2.3 `oot.o2r`, no ROM): the settings were
+  migrated, the old `oot.o2r` loaded, and the game booted. With an SDL virtual controller, pressing
+  View opened the settings menu with *Menu Controller Navigation* on, and pressing it again closed
+  it.
+- The GitHub Arm runner build that produced these files passed.
 
 ### Not tested yet
 - Anything on the Frame itself: performance, Zink/Turnip rendering, real controllers (the cloud
   tests used SDL virtual controllers), and running inside Steam Linux Runtime 4.
-- Whether every library SteamOS is expected to provide is actually present in the runtime. The
-  bundled ones are in `lib/`.
+- Updating over an existing v0.1.x install on the Frame (old `oot.o2r` and settings).
 - Text-to-speech isn't included (no eSpeak on the Frame).
 
 ### Please report
