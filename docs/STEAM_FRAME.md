@@ -1,6 +1,6 @@
 # Ship of Harkinian on the Steam Frame
 
-This fork adds a native **aarch64 Linux** build of Ship of Harkinian 9.2.3 for Valve's Steam Frame
+This fork adds a native **aarch64 Linux** build of Ship of Harkinian 9.3.0 for Valve's Steam Frame
 (Snapdragon 8 Gen 3, SteamOS on Arm). Running natively avoids FEX x86 emulation. It follows the
 2 Ship 2 Harkinian Frame port (`Cogential/2ship2harkinian-frame`).
 
@@ -105,13 +105,9 @@ EOF
 INSTALL_DEPS=1 steamframe/build-arm64.sh
 ```
 
-A cross build can't run its own ZAPD to make `soh.o2r`, which doesn't depend on the architecture.
-Build it with a host build and copy it in before packaging:
-
-```sh
-cmake -S . -B build -G Ninja && cmake --build build --target GenerateSohOtr
-cp build/soh/soh.o2r build-steamframe/soh/
-```
+The build makes `soh.o2r` with its own `soh-o2r-packer` tool. A cross build runs that aarch64 tool
+through `qemu-user`, which the toolchain file sets as the cross-compiling emulator, so install
+`qemu-user` (the script does with `INSTALL_DEPS=1`).
 
 With `qemu-user` installed you can smoke-test the arm64 binary on the host:
 `qemu-aarch64 -L /usr/aarch64-linux-gnu build-steamframe/soh/soh.elf`.

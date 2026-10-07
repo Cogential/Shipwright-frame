@@ -316,7 +316,8 @@ set(SOH_ROM_PATH "${CMAKE_SOURCE_DIR}/roms" CACHE STRING "Roms, or directories o
 add_custom_target(
     ExtractAssets
     COMMAND ${CMAKE_COMMAND} -E rm -f ${CMAKE_BINARY_DIR}/soh/oot.o2r ${CMAKE_BINARY_DIR}/soh/oot-mq.o2r
-    COMMAND $<TARGET_FILE:soh-torch>
+    # Named by target rather than $<TARGET_FILE:...> so cross builds run it through CMAKE_CROSSCOMPILING_EMULATOR.
+    COMMAND soh-torch
             --src ${CMAKE_CURRENT_SOURCE_DIR}/soh/assets/yml
             --dest ${CMAKE_BINARY_DIR}/soh
             --version ${CMAKE_PROJECT_VERSION}
@@ -348,7 +349,7 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E rm -r -f ${CMAKE_CURRENT_SOURCE_DIR}/soh/assets/custom/shaders/
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/libultraship/src/fast/shaders/ ${CMAKE_CURRENT_SOURCE_DIR}/soh/assets/custom/shaders/
 
-    COMMAND $<TARGET_FILE:soh-o2r-packer>
+    COMMAND soh-o2r-packer
             ${CMAKE_CURRENT_SOURCE_DIR}/soh/assets/custom
             ${CMAKE_BINARY_DIR}/soh/soh.o2r
             ${CMAKE_PROJECT_VERSION}

@@ -26,8 +26,8 @@ if [[ "${INSTALL_DEPS:-0}" == "1" ]]; then
         # Ubuntu serves arm64 from ports.ubuntu.com; see docs/STEAM_FRAME.md for the apt sources.
         sudo dpkg --add-architecture arm64
         sudo apt-get update
-        sudo apt-get install -y crossbuild-essential-arm64 git cmake ninja-build python3 lsb-release nlohmann-json3-dev \
-            patchelf zip $(for p in $DEV_PKGS; do printf '%s:arm64 ' "$p"; done)
+        sudo apt-get install -y crossbuild-essential-arm64 qemu-user git cmake ninja-build python3 lsb-release \
+            nlohmann-json3-dev patchelf zip $(for p in $DEV_PKGS; do printf '%s:arm64 ' "$p"; done)
     fi
 fi
 
@@ -40,12 +40,11 @@ fi
 
 cmake "${CMAKE_ARGS[@]}"
 
-if [[ $NATIVE == 1 ]]; then
-    cmake --build "$BUILD_DIR" --target GenerateSohOtr
-elif [[ ! -f "$BUILD_DIR/soh/soh.o2r" ]]; then
-    # soh.o2r is architecture independent but is produced by running ZAPD, which a cross build
-    # makes for aarch64. Build it with any host (x86_64) build and copy it over.
-    echo "note: copy a soh.o2r from a host build into $BUILD_DIR/soh/ (cmake --build build --target GenerateSohOtr)"
+if [[ $NATIVE == 0 ]] && ! command -v qemu-aarch64 >/dev/null; then
+    # The build runs its own soh-o2r-packer to make soh.o2r; a cross build runs that aarch64 tool
+    # through qemu-user (the toolchain file sets it as the cross-compiling emulator).
+    echo "error: a cross build needs qemu-user (qemu-aarch64) to build soh.o2r" >&2
+    exit 1
 fi
 
 cmake --build "$BUILD_DIR"
