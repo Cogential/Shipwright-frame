@@ -15,6 +15,11 @@ mkdir -p "$SHIP_HOME"
 # detection can't see the host OS. SOH_STEAM_FRAME=0 in the launch options turns it off.
 export SOH_STEAM_FRAME="${SOH_STEAM_FRAME:-1}"
 
+# Steam describes its virtual Xbox pad to SDL as "Steam Frame Controllers" (28de:11e0), which SDL has
+# no mapping for, so only some buttons arrive (the D-pad's up but not down, left or right). Without
+# the description SDL maps the pad as the Xbox pad it is.
+unset SteamVirtualGamepadInfo
+
 # Hand any ROM shipped next to the game to the data folder until SoH has built its archive.
 if [ ! -f "$SHIP_HOME/oot.o2r" ] && [ ! -f "$SHIP_HOME/oot-mq.o2r" ]; then
     for rom in "$DIR"/*.z64 "$DIR"/*.n64 "$DIR"/*.v64; do

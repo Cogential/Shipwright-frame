@@ -2,6 +2,12 @@
 
 No ROM or ROM-derived files are included. You need your own Ocarina of Time ROM.
 
+### New in frame-v0.2.1
+- **Fixes the D-pad and controller mapping on the Frame.** Steam describes its virtual controller in a
+  way SDL can't map, so only some buttons arrived (D-pad up worked, but down, left and right didn't,
+  even when remapping). `run.sh` now hides that description and the controller works as an Xbox pad.
+  Nothing else changed from frame-v0.2.0.
+
 ### New in frame-v0.2.0
 - **Updated to Ship of Harkinian 9.3.0.** See upstream's
   [9.3.0 release notes](https://github.com/HarbourMasters/Shipwright/releases/tag/9.3.0) for the
