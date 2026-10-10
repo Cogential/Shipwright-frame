@@ -23,6 +23,14 @@ void ApplyDefaults();
 // data folder (for diagnosing input from afar). Call once after the window is created.
 void InstallInputHooks();
 
+// The first controller button (SDL_GameControllerButton) pressed since the previous call, or -1. The
+// input editor binds it when polling the controller found nothing: the Frame's D-pad taps can be over
+// before the editor looks.
+int TakeGamepadButtonPress();
+
+// Adds a line to frame-input.log (printf-style).
+void LogInput(const char* fmt, ...);
+
 } // namespace SteamFrame
 
 #endif // STEAM_FRAME_H

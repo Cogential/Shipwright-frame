@@ -2,6 +2,13 @@
 
 No ROM or ROM-derived files are included. You need your own Ocarina of Time ROM.
 
+### New in frame-v0.2.3
+- **D-pad down, left and right can be bound again.** The controller sends every D-pad press, but the
+  input editor's check of the controller missed all but D-pad up, so the "Press any button" box
+  stayed open. On the Frame the editor now also binds the button whose press it received.
+- When that happens, `frame-input.log` records what the controller check saw, to find the
+  underlying cause.
+
 ### New in frame-v0.2.2
 - **The headset's laser pointer can't steal controller mappings any more.** While the controller
   points at the game window, Steam can send controller presses as mouse buttons (the D-pad showed up

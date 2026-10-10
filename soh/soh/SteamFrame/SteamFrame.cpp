@@ -1,5 +1,6 @@
 #include "SteamFrame.h"
 
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -63,6 +64,9 @@ FILE* sInputLog = nullptr;
 int sInputLogLines = 0;
 constexpr int kInputLogMaxLines = 4000;
 
+// For TakeGamepadButtonPress.
+std::atomic<int> sFirstGamepadButton{ -1 };
+
 void InputLog(const char* fmt, ...) {
     if (sInputLog == nullptr || sInputLogLines >= kInputLogMaxLines) {
         return;
@@ -110,10 +114,13 @@ int SDLCALL FilterInput(void*, SDL_Event* event) {
         case SDL_JOYBUTTONDOWN:
             InputLog("joystick %d button %d down", event->jbutton.which, event->jbutton.button);
             break;
-        case SDL_CONTROLLERBUTTONDOWN:
+        case SDL_CONTROLLERBUTTONDOWN: {
+            int none = -1;
+            sFirstGamepadButton.compare_exchange_strong(none, event->cbutton.button);
             InputLog("gamepad %d %s down", event->cbutton.which,
                      SDL_GameControllerGetStringForButton(static_cast<SDL_GameControllerButton>(event->cbutton.button)));
             break;
+        }
         case SDL_KEYDOWN:
             if (!event->key.repeat) {
                 InputLog("key %s down", SDL_GetScancodeName(event->key.keysym.scancode));
@@ -141,6 +148,19 @@ int SDLCALL FilterInput(void*, SDL_Event* event) {
 }
 
 } // namespace
+
+void LogInput(const char* fmt, ...) {
+    char line[512];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(line, sizeof(line), fmt, args);
+    va_end(args);
+    InputLog("%s", line);
+}
+
+int TakeGamepadButtonPress() {
+    return sFirstGamepadButton.exchange(-1);
+}
 
 bool IsSteamFrame() {
     static const bool sIsSteamFrame = Detect();
