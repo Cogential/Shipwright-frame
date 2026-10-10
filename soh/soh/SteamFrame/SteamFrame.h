@@ -18,6 +18,11 @@ bool IsSteamFrame();
 // after the configuration and CVars are loaded and before the window is created.
 void ApplyDefaults();
 
+// Controller fixes that need SDL running: keeps the headset's laser pointer from turning controller
+// presses into mouse-button mappings, and records what the controller sends to frame-input.log in the
+// data folder (for diagnosing input from afar). Call once after the window is created.
+void InstallInputHooks();
+
 } // namespace SteamFrame
 
 #endif // STEAM_FRAME_H

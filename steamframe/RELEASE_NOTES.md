@@ -2,6 +2,17 @@
 
 No ROM or ROM-derived files are included. You need your own Ocarina of Time ROM.
 
+### New in frame-v0.2.2
+- **The headset's laser pointer can't steal controller mappings any more.** While the controller
+  points at the game window, Steam can send controller presses as mouse buttons (the D-pad showed up
+  as the middle mouse button in the input editor). The Frame build now ignores every mouse button
+  except the pointer's click, so the input editor waits for the real controller button.
+- **Remapping tip:** point the controller away from the game window while the "Press any button"
+  popup is open, then press the D-pad direction.
+- **Input log for diagnosing the controller:** the first input after launch is recorded in
+  `~/.local/share/soh/frame-input.log` (the controllers SDL found, their mapping, and the buttons,
+  D-pad, keys and mouse buttons that arrive). It's rewritten each launch and stops at 4,000 lines.
+
 ### New in frame-v0.2.1
 - **Fixes the D-pad and controller mapping on the Frame.** Steam describes its virtual controller in a
   way SDL can't map, so only some buttons arrived (D-pad up worked, but down, left and right didn't,

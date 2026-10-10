@@ -1,11 +1,18 @@
 #include "SteamFrame.h"
 
+#include <cstdarg>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <string>
 
 #include <libultraship/libultraship.h>
+#ifdef __APPLE__
+#include <SDL.h>
+#else
+#include <SDL2/SDL.h>
+#endif
 
 #include "soh/cvar_prefixes.h"
 
@@ -50,6 +57,89 @@ bool Detect() {
 #endif
 }
 
+// frame-input.log: the controllers SDL found and the first input events, so the next session can see
+// what the Frame's controllers actually send. Capped so it can't grow during play.
+FILE* sInputLog = nullptr;
+int sInputLogLines = 0;
+constexpr int kInputLogMaxLines = 4000;
+
+void InputLog(const char* fmt, ...) {
+    if (sInputLog == nullptr || sInputLogLines >= kInputLogMaxLines) {
+        return;
+    }
+    va_list args;
+    va_start(args, fmt);
+    std::fprintf(sInputLog, "%8u ", SDL_GetTicks());
+    std::vfprintf(sInputLog, fmt, args);
+    std::fputc('\n', sInputLog);
+    va_end(args);
+    if (++sInputLogLines == kInputLogMaxLines) {
+        std::fputs("(log full)\n", sInputLog);
+    }
+    std::fflush(sInputLog);
+}
+
+void LogJoystick(int deviceIndex, bool open) {
+    char guid[64];
+    SDL_JoystickGetGUIDString(SDL_JoystickGetDeviceGUID(deviceIndex), guid, sizeof(guid));
+    const char* name = SDL_JoystickNameForIndex(deviceIndex);
+    InputLog("device %d: \"%s\" %04x:%04x guid %s gamecontroller %d", deviceIndex, name ? name : "?",
+             SDL_JoystickGetDeviceVendor(deviceIndex), SDL_JoystickGetDeviceProduct(deviceIndex), guid,
+             SDL_IsGameController(deviceIndex));
+    if (char* mapping = SDL_GameControllerMappingForDeviceIndex(deviceIndex)) {
+        InputLog("  mapping %s", mapping);
+        SDL_free(mapping);
+    }
+    // Not from the event filter: SDL calls it while adding the device.
+    SDL_Joystick* joystick = open ? SDL_JoystickOpen(deviceIndex) : nullptr;
+    if (joystick != nullptr) {
+        InputLog("  %d axes, %d buttons, %d hats", SDL_JoystickNumAxes(joystick), SDL_JoystickNumButtons(joystick),
+                 SDL_JoystickNumHats(joystick));
+        SDL_JoystickClose(joystick);
+    }
+}
+
+int SDLCALL FilterInput(void*, SDL_Event* event) {
+    switch (event->type) {
+        case SDL_JOYDEVICEADDED:
+            LogJoystick(event->jdevice.which, false);
+            break;
+        case SDL_JOYHATMOTION:
+            InputLog("joystick %d hat %d = %d", event->jhat.which, event->jhat.hat, event->jhat.value);
+            break;
+        case SDL_JOYBUTTONDOWN:
+            InputLog("joystick %d button %d down", event->jbutton.which, event->jbutton.button);
+            break;
+        case SDL_CONTROLLERBUTTONDOWN:
+            InputLog("gamepad %d %s down", event->cbutton.which,
+                     SDL_GameControllerGetStringForButton(static_cast<SDL_GameControllerButton>(event->cbutton.button)));
+            break;
+        case SDL_KEYDOWN:
+            if (!event->key.repeat) {
+                InputLog("key %s down", SDL_GetScancodeName(event->key.keysym.scancode));
+            }
+            break;
+        case SDL_MOUSEWHEEL:
+            InputLog("mouse wheel %d,%d", event->wheel.x, event->wheel.y);
+            break;
+        case SDL_MOUSEBUTTONDOWN:
+        case SDL_MOUSEBUTTONUP:
+            if (event->type == SDL_MOUSEBUTTONDOWN) {
+                InputLog("mouse button %d down", event->button.button);
+            }
+            // The headset's laser pointer clicks with the left button. The other buttons it sends come
+            // from controller presses (the D-pad has shown up as the middle button), and the input editor
+            // would bind them instead of the controller button the player meant: drop them.
+            if (event->button.button != SDL_BUTTON_LEFT) {
+                return 0;
+            }
+            break;
+        default:
+            break;
+    }
+    return 1;
+}
+
 } // namespace
 
 bool IsSteamFrame() {
@@ -91,6 +181,30 @@ void ApplyDefaults() {
         config->SetInt("Window.Fullscreen.Height", 1080);
     }
     config->Save();
+}
+
+void InstallInputHooks() {
+    if (!IsSteamFrame()) {
+        return;
+    }
+    std::string folder;
+    if (const char* shipHome = std::getenv("SHIP_HOME"); shipHome != nullptr && shipHome[0] != '\0') {
+        folder = shipHome;
+    } else if (const char* home = std::getenv("HOME"); home != nullptr) {
+        folder = std::string(home) + "/.local/share/soh";
+    }
+    if (!folder.empty()) {
+        sInputLog = std::fopen((folder + "/frame-input.log").c_str(), "w");
+    }
+    SDL_version linked;
+    SDL_GetVersion(&linked);
+    const char* steamPadInfo = std::getenv("SteamVirtualGamepadInfo");
+    InputLog("SDL %d.%d.%d, video %s, SteamVirtualGamepadInfo %s", linked.major, linked.minor, linked.patch,
+             SDL_GetCurrentVideoDriver() ? SDL_GetCurrentVideoDriver() : "?", steamPadInfo ? steamPadInfo : "(unset)");
+    for (int i = 0; i < SDL_NumJoysticks(); i++) {
+        LogJoystick(i, true);
+    }
+    SDL_SetEventFilter(FilterInput, nullptr);
 }
 
 } // namespace SteamFrame

@@ -310,6 +310,7 @@ OTRGlobals::OTRGlobals() {
     sohFast3dWindow =
         std::make_shared<Fast::Fast3dWindow>(std::vector<std::shared_ptr<Ship::GuiWindow>>({ sohInputEditorWindow }));
     context->InitWindow(sohFast3dWindow);
+    SteamFrame::InstallInputHooks();
 
     SohGui::SetupMenu();
 
