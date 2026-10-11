@@ -16,8 +16,6 @@ extern "C" {
 
 #ifndef __WIIU__
 #include <ship/controller/controldevice/controller/mapping/sdl/SDLAxisDirectionToButtonMapping.h>
-#include <ship/controller/controldevice/controller/mapping/sdl/SDLButtonToButtonMapping.h>
-#include "soh/SteamFrame/SteamFrame.h"
 #endif
 
 #define SCALE_IMGUI_SIZE(value) ((value / 13.0f) * ImGui::GetFontSize())
@@ -72,41 +70,6 @@ void SohInputEditorWindow::InitElement() {
 }
 
 #define INPUT_EDITOR_WINDOW_GAME_INPUT_BLOCK_ID 95237929
-// Steam Frame: binds the controller button pressed while the popup was open, for when polling the
-// controller (AddOrEditButtonMappingFromRawPress) found nothing, as with the Frame's D-pad.
-static bool AddFrameButtonMappingFromPress(uint8_t port, N64ButtonMask bitmask, const std::string& id) {
-    if (!SteamFrame::IsSteamFrame()) {
-        return false;
-    }
-    const int sdlButton = SteamFrame::TakeGamepadButtonPress();
-    if (sdlButton < 0) {
-        return false;
-    }
-    // What polling saw, to find out why it missed the press
-    for (auto [instanceId, gamepad] : Ship::Context::GetRawInstance()
-                                          ->GetControlDeck()
-                                          ->GetConnectedPhysicalDeviceManager()
-                                          ->GetConnectedSDLGamepadsForPort(port)) {
-        SteamFrame::LogInput("editor: binding %s from its press; polled gamepad %d: button %d, hat %d",
-                             SDL_GameControllerGetStringForButton(static_cast<SDL_GameControllerButton>(sdlButton)),
-                             instanceId,
-                             SDL_GameControllerGetButton(gamepad, static_cast<SDL_GameControllerButton>(sdlButton)),
-                             SDL_JoystickGetHat(SDL_GameControllerGetJoystick(gamepad), 0));
-    }
-    auto button = Ship::Context::GetRawInstance()->GetControlDeck()->GetControllerByPort(port)->GetButton(bitmask);
-    if (id != "") {
-        button->ClearButtonMapping(id);
-    }
-    auto mapping = std::make_shared<Ship::SDLButtonToButtonMapping>(port, bitmask, sdlButton);
-    button->AddButtonMapping(mapping);
-    mapping->SaveToConfig();
-    button->SaveButtonMappingIdsToConfig();
-    Ship::Context::GetRawInstance()->GetConsoleVariables()->SetInteger(
-        StringHelper::Sprintf(CVAR_PREFIX_CONTROLLERS ".Port%d.HasConfig", port + 1).c_str(), true);
-    Ship::Context::GetRawInstance()->GetConsoleVariables()->Save();
-    return true;
-}
-
 void SohInputEditorWindow::UpdateElement() {
     if (mRumbleTimer != INT32_MAX) {
         mRumbleTimer--;
@@ -153,11 +116,6 @@ void SohInputEditorWindow::UpdateElement() {
         }
 
         Ship::Context::GetRawInstance()->GetWindow()->GetGui()->UnblockGamepadNavigation();
-    }
-
-    // Presses from before a mapping popup opened (or while it ignores input) are not for it
-    if (SteamFrame::IsSteamFrame() && !(mInputEditorPopupOpen && mMappingInputBlockTimer == INT32_MAX)) {
-        SteamFrame::TakeGamepadButtonPress();
     }
 }
 
@@ -296,12 +254,11 @@ void SohInputEditorWindow::DrawButtonLineAddMappingButton(uint8_t port, N64Butto
             ImGui::CloseCurrentPopup();
         }
         // todo: figure out why optional params (using id = "" in the definition) wasn't working
-        if (mMappingInputBlockTimer == INT32_MAX && (Ship::Context::GetRawInstance()
-                                                         ->GetControlDeck()
-                                                         ->GetControllerByPort(port)
-                                                         ->GetButton(bitmask)
-                                                         ->AddOrEditButtonMappingFromRawPress(bitmask, "") ||
-                                                     AddFrameButtonMappingFromPress(port, bitmask, ""))) {
+        if (mMappingInputBlockTimer == INT32_MAX && Ship::Context::GetRawInstance()
+                                                        ->GetControlDeck()
+                                                        ->GetControllerByPort(port)
+                                                        ->GetButton(bitmask)
+                                                        ->AddOrEditButtonMappingFromRawPress(bitmask, "")) {
             mInputEditorPopupOpen = false;
             ImGui::CloseCurrentPopup();
         }
@@ -360,12 +317,11 @@ void SohInputEditorWindow::DrawButtonLineEditMappingButton(uint8_t port, N64Butt
             mInputEditorPopupOpen = false;
             ImGui::CloseCurrentPopup();
         }
-        if (mMappingInputBlockTimer == INT32_MAX && (Ship::Context::GetRawInstance()
-                                                         ->GetControlDeck()
-                                                         ->GetControllerByPort(port)
-                                                         ->GetButton(bitmask)
-                                                         ->AddOrEditButtonMappingFromRawPress(bitmask, id) ||
-                                                     AddFrameButtonMappingFromPress(port, bitmask, id))) {
+        if (mMappingInputBlockTimer == INT32_MAX && Ship::Context::GetRawInstance()
+                                                        ->GetControlDeck()
+                                                        ->GetControllerByPort(port)
+                                                        ->GetButton(bitmask)
+                                                        ->AddOrEditButtonMappingFromRawPress(bitmask, id)) {
             mInputEditorPopupOpen = false;
             ImGui::CloseCurrentPopup();
         }
