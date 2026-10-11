@@ -1,3 +1,23 @@
+**Experimental: Ship of Harkinian in 3D on the Steam Frame.** A native ARM64 Linux build of Ship of Harkinian 9.3.0 that shows the game on a floating 3D screen: each eye sees its own picture, so Hyrule has real depth while you play with the controller as usual. It's a separate install from the normal Frame build and shares its saves, settings and `oot.o2r` (`~/.local/share/soh`).
+
+No ROM or ROM-derived files are included. You need your own Ocarina of Time ROM.
+
+### Adjusting the 3D
+Hold a **grip** and press the **D-pad**:
+- Left grip + D-pad up/down: more or less depth.
+- Left grip + D-pad left/right: move the focus (what sits on the screen) farther or nearer.
+- Right grip + D-pad up/down: bigger or smaller screen.
+- Right grip + D-pad left/right: screen farther or nearer.
+
+Settings are saved. Use SteamVR's recenter if the screen isn't in front of you.
+
+### Not tested on a headset yet
+- If the headset can't be used the game plays flat as usual, and the reason is in the log (`~/.local/share/soh/logs/`, lines starting `Frame 3D:`).
+- The controllers are read through OpenXR and given to the game as a gamepad, in case Steam's own gamepad stops while the game is a VR app.
+- MSAA is off in 3D mode.
+
+---
+
 **Test build: native ARM64 Linux build of Ship of Harkinian 9.3.0 "Dewey Alfa" for the Steam Frame.**
 
 No ROM or ROM-derived files are included. You need your own Ocarina of Time ROM.

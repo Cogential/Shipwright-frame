@@ -22,4 +22,19 @@ if [ ! -f "$SHIP_HOME/oot.o2r" ] && [ ! -f "$SHIP_HOME/oot-mq.o2r" ]; then
     done
 fi
 
+# 3D mode: the game opens its own OpenXR session and shows itself on a floating 3D screen. If the
+# headset can't be used it plays flat as usual (the reason is in the log). SHIP_FRAME_3D=0 turns it off.
+export SHIP_FRAME_3D="${SHIP_FRAME_3D:-1}"
+export FRAME3D_OPENXR_LOADER="$DIR/lib/libopenxr_loader.so.1"
+# SteamVR's OpenXR runtime. Inside Steam Linux Runtime the host's files are under /run/host.
+if [ -z "$XR_RUNTIME_JSON" ]; then
+    for f in "$HOME/.config/openxr/1/active_runtime.json" \
+             /run/host/etc/xdg/openxr/1/active_runtime.json /run/host/usr/share/openxr/1/active_runtime.json \
+             /etc/xdg/openxr/1/active_runtime.json /usr/share/openxr/1/active_runtime.json; do
+        if [ -f "$f" ]; then export XR_RUNTIME_JSON="$f"; break; fi
+    done
+fi
+# The headset output binds the game's GLX context, so keep SDL on X11.
+export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-x11}"
+
 exec "$DIR/soh.elf" "$@"

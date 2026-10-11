@@ -15,7 +15,7 @@ OUT="$(realpath -m "${2:-$PWD/soh-steam-frame-arm64.zip}")"
 NAME=soh-steam-frame
 
 # Libraries SteamOS lacks: bundle these.
-BUNDLE='^lib(SDL2-2\.0|SDL2_net-2\.0|zip|tinyxml2|spdlog|fmt|opusfile|opus|samplerate|usb-1\.0|GLEW)\.so'
+BUNDLE='^lib(SDL2-2\.0|SDL2_net-2\.0|zip|tinyxml2|spdlog|fmt|opusfile|opus|samplerate|usb-1\.0|GLEW|openxr_loader|jsoncpp)\.so'
 # Libraries the Frame provides. Never bundle glibc, libstdc++/libgcc_s or graphics/windowing
 # libraries: SteamOS's are newer and Mesa needs its own.
 SYSTEM='^(ld-linux.*|lib(c|m|dl|pthread|rt|mvec|stdc\+\+|gcc_s|GL|GLX|GLdispatch|OpenGL|EGL|GLESv2|vulkan|X11|X11-xcb|Xext|Xi|Xrandr|Xcursor|Xfixes|Xss|Xxf86vm|xcb|wayland-.*|xkbcommon|decor-0|drm|gbm|z|bz2|png16|ogg|vorbis|vorbisfile|vorbisenc|pulse|pulse-simple|asound|crypto|ssl|lzma|zstd|lz4|udev|dbus-1|systemd|cap|gcrypt|gpg-error))\.so'
@@ -53,6 +53,11 @@ find_lib() {
 
 mkdir -p "$APP/lib"
 queue=("$APP/soh.elf")
+# 3D mode loads the OpenXR loader at run time (dlopen), so it isn't in soh.elf's NEEDED list.
+loader="$(find_lib libopenxr_loader.so.1)" || { echo "error: libopenxr_loader.so.1 not found for bundling" >&2; exit 1; }
+cp -L "$loader" "$APP/lib/libopenxr_loader.so.1"
+echo "bundled libopenxr_loader.so.1  <- $(readlink -f "$loader")"
+queue+=("$APP/lib/libopenxr_loader.so.1")
 while [[ ${#queue[@]} -gt 0 ]]; do
     elf="${queue[0]}"
     queue=("${queue[@]:1}")

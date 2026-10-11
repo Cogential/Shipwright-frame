@@ -1,0 +1,1123 @@
+diff --git a/include/fast/FrameStereo.h b/include/fast/FrameStereo.h
+new file mode 100644
+index 00000000..5e94f4f3
+--- /dev/null
++++ b/include/fast/FrameStereo.h
+@@ -0,0 +1,34 @@
++#pragma once
++
++// Steam Frame 3D mode: the game is drawn as a side-by-side stereo pair and shown in the headset on a
++// floating 3D screen (two OpenXR quad layers, one per eye), instead of SteamVR's flat theater screen.
++//
++// SHIP_FRAME_3D selects it: unset or 0 is off, "sbs" draws the side-by-side picture into the window
++// (to check the stereo image on a desktop), anything else uses the headset. Tuning lives in CVars:
++//   gFrame3D.Depth        stereo strength, 1 = default
++//   gFrame3D.Focus        distance (game units) that sits on the screen; nearer things pop out
++//   gFrame3D.ScreenWidth  width of the virtual screen in metres
++//   gFrame3D.Distance     distance of the virtual screen in metres
++
++struct ImDrawData;
++struct ImVec2;
++
++namespace Fast::FrameStereo {
++
++// Whether the game should be rendered as a side-by-side pair this frame.
++bool RenderStereo();
++// Horizontal eye separation in normalised device coordinates, and the clip-space w at zero parallax.
++float Separation();
++float Convergence();
++
++// Draws the game framebuffer into the current ImGui window: the left eye, or the whole pair in "sbs".
++void DrawGameImage(void* texture, const ImVec2& size);
++
++// Shows the finished frame in the headset. Returns false when the headset isn't in use, so the caller
++// renders ImGui to the window as usual.
++bool Present(ImDrawData* drawData);
++
++// True while frames go to the headset instead of the window (the window isn't swapped then).
++bool PresentsToHeadset();
++
++} // namespace Fast::FrameStereo
+diff --git a/include/fast/backends/gfx_opengl.h b/include/fast/backends/gfx_opengl.h
+index af24c702..549b0007 100644
+--- a/include/fast/backends/gfx_opengl.h
++++ b/include/fast/backends/gfx_opengl.h
+@@ -43,6 +43,8 @@ struct ShaderProgram {
+ 
+ struct FramebufferOGL {
+     uint32_t width, height;
++    // Allocated width: twice width for the side-by-side 3D framebuffer.
++    uint32_t alloc_width;
+     bool has_depth_buffer;
+     uint32_t msaa_level;
+     bool invertY;
+@@ -104,8 +106,13 @@ class GfxRenderingAPIOGL final : public GfxRenderingAPI {
+     FilteringMode GetTextureFilter() override;
+     void SetSrgbMode() override;
+     ImTextureID GetTextureById(int id) override;
++    void SetStereo(int fbId, float separation, float convergence) override;
+ 
+   private:
++    bool IsStereo(int fbId) const {
++        return fbId == mStereoFb && fbId >= 0;
++    }
++    void DrawStereo(float buf_vbo[], size_t buf_vbo_len, size_t buf_vbo_num_tris);
+     void SetUniforms(ShaderProgram* prg) const;
+     std::string BuildFsShader(const CCFeatures& cc_features);
+     void SetPerDrawUniforms();
+@@ -138,6 +145,13 @@ class GfxRenderingAPIOGL final : public GfxRenderingAPI {
+     GLuint mPixelDepthRb = 0;
+     GLuint mPixelDepthFb = 0;
+     size_t mPixelDepthRbSize = 0;
++
++    int mStereoFb = -1;
++    float mStereoSeparation = 0.0f;
++    float mStereoConvergence = 1.0f;
++    GLint mViewport[4] = {};
++    GLint mScissor[4] = {};
++    std::vector<float> mStereoVbo;
+ };
+ 
+ } // namespace Fast
+diff --git a/include/fast/backends/gfx_rendering_api.h b/include/fast/backends/gfx_rendering_api.h
+index 3eb09961..6c52dd62 100644
+--- a/include/fast/backends/gfx_rendering_api.h
++++ b/include/fast/backends/gfx_rendering_api.h
+@@ -79,6 +79,10 @@ class GfxRenderingAPI {
+     virtual void SetSrgbMode() = 0;
+     virtual ImTextureID GetTextureById(int id) = 0;
+     virtual void SetCurrentPrimDepth(float depth) = 0;
++    // Steam Frame 3D (FrameStereo.h): fbId is drawn as a side-by-side pair, twice as wide, with every draw made
++    // once per eye and shifted by separation * (w - convergence) in clip space. A negative fbId turns it off.
++    virtual void SetStereo(int fbId, float separation, float convergence) {
++    }
+ 
+   protected:
+     int8_t mCurrentDepthTest = 0;
+diff --git a/include/fast/interpreter.h b/include/fast/interpreter.h
+index 4c6a705c..c1e32e96 100644
+--- a/include/fast/interpreter.h
++++ b/include/fast/interpreter.h
+@@ -524,6 +524,8 @@ class Interpreter {
+     uintptr_t mGfxFrameBuffer{};
+ 
+     unsigned int mMsaaLevel = 1;
++    // The MSAA level to go back to when 3D mode (FrameStereo) is turned off.
++    unsigned int mStereoSavedMsaaLevel = 0;
+     bool mDroppedFrame{};
+     float* mBufVbo; // 3 vertices in a triangle and 32 floats per vtx
+     size_t mBufVboLen{};
+diff --git a/src/fast/Fast3dGui.cpp b/src/fast/Fast3dGui.cpp
+index 237a502a..74b25cca 100644
+--- a/src/fast/Fast3dGui.cpp
++++ b/src/fast/Fast3dGui.cpp
+@@ -1,4 +1,5 @@
+ #include "fast/Fast3dGui.h"
++#include "fast/FrameStereo.h"
+ 
+ #include "fast/Fast3dWindow.h"
+ #include "ship/Context.h"
+@@ -251,7 +252,9 @@ void Fast3dGui::ImGuiRenderDrawData(ImDrawData* data) {
+     switch (mImpl.Backend) {
+ #ifdef ENABLE_OPENGL
+         case WindowBackend::FAST3D_SDL_OPENGL:
+-            ImGui_ImplOpenGL3_RenderDrawData(data);
++            if (!FrameStereo::Present(data)) {
++                ImGui_ImplOpenGL3_RenderDrawData(data);
++            }
+             break;
+ #endif
+ 
+@@ -417,7 +420,11 @@ void Fast3dGui::DrawGame() {
+     uintptr_t fb = Ship::Context::GetRawInstance()->GetWindow()->GetGfxFrameBuffer();
+     if (fb) {
+         ImGui::SetCursorPos(pos);
+-        ImGui::Image(reinterpret_cast<ImTextureID>(fb), size);
++        if (FrameStereo::RenderStereo()) {
++            FrameStereo::DrawGameImage(reinterpret_cast<void*>(fb), size);
++        } else {
++            ImGui::Image(reinterpret_cast<ImTextureID>(fb), size);
++        }
+     }
+ 
+     ImGui::End();
+diff --git a/src/fast/FrameStereo.cpp b/src/fast/FrameStereo.cpp
+new file mode 100644
+index 00000000..fee63918
+--- /dev/null
++++ b/src/fast/FrameStereo.cpp
+@@ -0,0 +1,775 @@
++// Steam Frame 3D mode (see FrameStereo.h).
++//
++// The renderer (gfx_opengl) draws the game twice into a double-width framebuffer, once per eye. Here the
++// finished frame, menus included, is rendered once per eye and handed to SteamVR as two quad layers, one
++// seen only by each eye, which makes a floating 3D screen. The session also reads the Frame controllers
++// through OpenXR and feeds them to the game as an SDL gamepad, in case Steam stops presenting its own
++// gamepad once the game is a VR app.
++
++#include "fast/FrameStereo.h"
++#include "ship/Context.h"
++#include "ship/config/ConsoleVariable.h"
++#include <imgui.h>
++#include <spdlog/spdlog.h>
++
++#include <cmath>
++#include <cstdlib>
++#include <cstring>
++#include <strings.h>
++#include <string>
++#include <vector>
++
++#if defined(ENABLE_OPENGL) && defined(__linux__) && !defined(__ANDROID__) && !defined(USE_OPENGLES)
++#define FRAME_STEREO_XR 1
++#endif
++
++#ifdef FRAME_STEREO_XR
++#include <dlfcn.h>
++#include <SDL2/SDL.h>
++#define GL_GLEXT_PROTOTYPES 1
++#include <SDL2/SDL_opengl.h>
++#include <imgui_impl_opengl3.h>
++// Xlib and GLX last: they define macros (None, Success, Bool) that clash with other headers.
++#include <X11/Xlib.h>
++#include <GL/glx.h>
++#define XR_USE_PLATFORM_XLIB
++#define XR_USE_GRAPHICS_API_OPENGL
++#include <openxr/openxr.h>
++#include <openxr/openxr_platform.h>
++#endif
++
++namespace Fast::FrameStereo {
++namespace {
++
++enum class Mode { Off, SideBySide, Headset };
++
++Mode ReadMode() {
++    const char* value = std::getenv("SHIP_FRAME_3D");
++    if (value == nullptr || *value == '\0' || std::strcmp(value, "0") == 0) {
++        return Mode::Off;
++    }
++    return strcasecmp(value, "sbs") == 0 ? Mode::SideBySide : Mode::Headset;
++}
++
++const Mode sMode = ReadMode();
++// Set when the headset couldn't be used: the game then falls back to the normal flat picture.
++bool sHeadsetFailed = false;
++
++// At Depth 1 the farthest things are this far apart between the eyes, in normalised device
++// coordinates (2 = the screen's width). On a 3 m screen that is about 4.5 cm, under the eyes' spacing,
++// so the background never makes the eyes diverge.
++constexpr float kBaseSeparation = 0.03f;
++
++Ship::ConsoleVariable* CVars() {
++    return Ship::Context::GetRawInstance()->GetConsoleVariables().get();
++}
++
++float Depth() {
++    return CVars()->GetFloat("gFrame3D.Depth", 1.0f);
++}
++
++float Focus() {
++    return CVars()->GetFloat("gFrame3D.Focus", 300.0f);
++}
++
++float ScreenWidth() {
++    return CVars()->GetFloat("gFrame3D.ScreenWidth", 3.0f);
++}
++
++float ScreenDistance() {
++    return CVars()->GetFloat("gFrame3D.Distance", 2.5f);
++}
++
++// The game image's vertices in this frame's ImGui draw data, so the right eye can sample the right half.
++ImDrawList* sGameImageList = nullptr;
++int sGameImageVtxBegin = 0;
++int sGameImageVtxEnd = 0;
++
++void ShiftGameImage(float du) {
++    if (sGameImageList == nullptr || du == 0.0f) {
++        return;
++    }
++    for (int i = sGameImageVtxBegin; i < sGameImageVtxEnd && i < sGameImageList->VtxBuffer.Size; i++) {
++        sGameImageList->VtxBuffer[i].uv.x += du;
++    }
++}
++
++#ifdef FRAME_STEREO_XR
++
++// A gamepad made from the Frame controllers' OpenXR inputs.
++struct Pad {
++    XrActionSet set = XR_NULL_HANDLE;
++    XrAction leftStick = XR_NULL_HANDLE, rightStick = XR_NULL_HANDLE;
++    XrAction leftTrigger = XR_NULL_HANDLE, rightTrigger = XR_NULL_HANDLE;
++    XrAction leftGrip = XR_NULL_HANDLE, rightGrip = XR_NULL_HANDLE;
++    XrAction buttons[SDL_CONTROLLER_BUTTON_MAX] = {};
++    SDL_Joystick* joystick = nullptr;
++    bool lastDpad[4] = {};
++};
++
++class Headset {
++  public:
++    bool Init();
++    bool Present(ImDrawData* drawData);
++    bool Presenting() const {
++        return mPresenting;
++    }
++
++  private:
++    template <typename T> bool Load(T& fn, const char* name) {
++        fn = nullptr;
++        if (XR_FAILED(mGetProcAddr(mInstance, name, reinterpret_cast<PFN_xrVoidFunction*>(&fn))) || !fn) {
++            return Fail(std::string("missing OpenXR function ") + name);
++        }
++        return true;
++    }
++    bool Fail(const std::string& message) {
++        SPDLOG_ERROR("Frame 3D: {}", message);
++        return false;
++    }
++    bool Check(XrResult result, const char* what) {
++        if (XR_SUCCEEDED(result)) {
++            return true;
++        }
++        char text[XR_MAX_RESULT_STRING_SIZE] = "";
++        if (mResultToString == nullptr || XR_FAILED(mResultToString(mInstance, result, text))) {
++            std::snprintf(text, sizeof(text), "%d", static_cast<int>(result));
++        }
++        return Fail(std::string(what) + " failed: " + text);
++    }
++    bool HasExtension(const std::vector<XrExtensionProperties>& extensions, const char* name) const {
++        for (const auto& extension : extensions) {
++            if (std::strcmp(extension.extensionName, name) == 0) {
++                return true;
++            }
++        }
++        return false;
++    }
++    XrPath Path(const char* path) {
++        XrPath result = XR_NULL_PATH;
++        mStringToPath(mInstance, path, &result);
++        return result;
++    }
++    bool CreatePad();
++    void SuggestPadBindings(const char* profile, bool frameProfile);
++    void UpdatePad();
++    void PollEvents();
++    bool EnsureTargets(int width, int height);
++
++    void* mLoader = nullptr;
++    PFN_xrGetInstanceProcAddr mGetProcAddr = nullptr;
++    PFN_xrResultToString mResultToString = nullptr;
++    PFN_xrStringToPath mStringToPath = nullptr;
++    PFN_xrPollEvent mPollEvent = nullptr;
++    PFN_xrBeginSession mBeginSession = nullptr;
++    PFN_xrEndSession mEndSession = nullptr;
++    PFN_xrWaitFrame mWaitFrame = nullptr;
++    PFN_xrBeginFrame mBeginFrame = nullptr;
++    PFN_xrEndFrame mEndFrame = nullptr;
++    PFN_xrCreateSwapchain mCreateSwapchain = nullptr;
++    PFN_xrDestroySwapchain mDestroySwapchain = nullptr;
++    PFN_xrEnumerateSwapchainImages mEnumerateSwapchainImages = nullptr;
++    PFN_xrAcquireSwapchainImage mAcquireSwapchainImage = nullptr;
++    PFN_xrWaitSwapchainImage mWaitSwapchainImage = nullptr;
++    PFN_xrReleaseSwapchainImage mReleaseSwapchainImage = nullptr;
++    PFN_xrCreateActionSet mCreateActionSet = nullptr;
++    PFN_xrCreateAction mCreateAction = nullptr;
++    PFN_xrSuggestInteractionProfileBindings mSuggestBindings = nullptr;
++    PFN_xrAttachSessionActionSets mAttachActionSets = nullptr;
++    PFN_xrSyncActions mSyncActions = nullptr;
++    PFN_xrGetActionStateBoolean mGetBoolean = nullptr;
++    PFN_xrGetActionStateFloat mGetFloat = nullptr;
++    PFN_xrGetActionStateVector2f mGetVector2f = nullptr;
++
++    XrInstance mInstance = XR_NULL_HANDLE;
++    XrSystemId mSystem = XR_NULL_SYSTEM_ID;
++    XrSession mSession = XR_NULL_HANDLE;
++    XrSpace mSpace = XR_NULL_HANDLE;
++    XrSessionState mState = XR_SESSION_STATE_UNKNOWN;
++    bool mRunning = false;
++    bool mPresenting = false;
++    bool mFrameProfile = false;
++    Pad mPad;
++
++    XrSwapchain mSwapchain = XR_NULL_HANDLE;
++    std::vector<XrSwapchainImageOpenGLKHR> mImages;
++    int64_t mFormat = 0;
++    int mWidth = 0, mHeight = 0;
++    GLuint mEyeTextures[2] = {}, mEyeFbos[2] = {}, mBlitFbo = 0;
++};
++
++bool Headset::Init() {
++    Display* display = glXGetCurrentDisplay();
++    GLXContext context = glXGetCurrentContext();
++    GLXDrawable drawable = glXGetCurrentDrawable();
++    if (display == nullptr || context == nullptr) {
++        return Fail("no GLX context (the game must run on X11 with desktop OpenGL)");
++    }
++    int fbConfigId = 0;
++    if (glXQueryContext(display, context, GLX_FBCONFIG_ID, &fbConfigId) != Success) {
++        return Fail("glXQueryContext failed");
++    }
++    const int attributes[] = { GLX_FBCONFIG_ID, fbConfigId, None };
++    int count = 0;
++    GLXFBConfig* configs = glXChooseFBConfig(display, DefaultScreen(display), attributes, &count);
++    if (configs == nullptr || count < 1) {
++        return Fail("no GLXFBConfig for the game's context");
++    }
++    GLXFBConfig fbConfig = configs[0];
++    // XFree comes from libX11, which SDL has loaded; look it up rather than link it.
++    auto xFree = reinterpret_cast<int (*)(void*)>(dlsym(RTLD_DEFAULT, "XFree"));
++    XVisualInfo* visual = glXGetVisualFromFBConfig(display, fbConfig);
++    const uint32_t visualId = visual != nullptr ? static_cast<uint32_t>(visual->visualid) : 0;
++    if (xFree != nullptr) {
++        xFree(configs);
++        if (visual != nullptr) {
++            xFree(visual);
++        }
++    }
++
++    const char* loaderPath = std::getenv("FRAME3D_OPENXR_LOADER");
++    for (const char* candidate : { loaderPath, "libopenxr_loader.so.1", "libopenxr_loader.so" }) {
++        if (candidate != nullptr && *candidate != '\0' && (mLoader = dlopen(candidate, RTLD_NOW | RTLD_LOCAL))) {
++            break;
++        }
++    }
++    if (mLoader == nullptr) {
++        return Fail(std::string("can't load the OpenXR loader: ") + dlerror());
++    }
++    mGetProcAddr = reinterpret_cast<PFN_xrGetInstanceProcAddr>(dlsym(mLoader, "xrGetInstanceProcAddr"));
++    if (mGetProcAddr == nullptr) {
++        return Fail("the OpenXR loader has no xrGetInstanceProcAddr");
++    }
++
++    PFN_xrEnumerateInstanceExtensionProperties enumerateExtensions = nullptr;
++    PFN_xrCreateInstance createInstance = nullptr;
++    if (!Load(enumerateExtensions, "xrEnumerateInstanceExtensionProperties") ||
++        !Load(createInstance, "xrCreateInstance")) {
++        return false;
++    }
++    uint32_t extensionCount = 0;
++    if (!Check(enumerateExtensions(nullptr, 0, &extensionCount, nullptr), "xrEnumerateInstanceExtensionProperties")) {
++        return false;
++    }
++    std::vector<XrExtensionProperties> extensions(extensionCount, { XR_TYPE_EXTENSION_PROPERTIES });
++    enumerateExtensions(nullptr, extensionCount, &extensionCount, extensions.data());
++    if (!HasExtension(extensions, XR_KHR_OPENGL_ENABLE_EXTENSION_NAME)) {
++        return Fail("the OpenXR runtime has no OpenGL support");
++    }
++    std::vector<const char*> enabled = { XR_KHR_OPENGL_ENABLE_EXTENSION_NAME };
++    mFrameProfile = HasExtension(extensions, "XR_VALVE_frame_controller_interaction");
++    if (mFrameProfile) {
++        enabled.push_back("XR_VALVE_frame_controller_interaction");
++    }
++
++    XrInstanceCreateInfo instanceInfo{ XR_TYPE_INSTANCE_CREATE_INFO };
++    std::strncpy(instanceInfo.applicationInfo.applicationName, "Ship of Harkinian 3D", XR_MAX_APPLICATION_NAME_SIZE);
++    std::strncpy(instanceInfo.applicationInfo.engineName, "libultraship", XR_MAX_ENGINE_NAME_SIZE);
++    instanceInfo.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
++    instanceInfo.enabledExtensionCount = static_cast<uint32_t>(enabled.size());
++    instanceInfo.enabledExtensionNames = enabled.data();
++    if (!Check(createInstance(&instanceInfo, &mInstance), "xrCreateInstance")) {
++        return false;
++    }
++
++    PFN_xrGetSystem getSystem = nullptr;
++    PFN_xrGetOpenGLGraphicsRequirementsKHR getRequirements = nullptr;
++    PFN_xrCreateSession createSession = nullptr;
++    PFN_xrCreateReferenceSpace createReferenceSpace = nullptr;
++    if (!Load(mResultToString, "xrResultToString") || !Load(mStringToPath, "xrStringToPath") ||
++        !Load(getSystem, "xrGetSystem") || !Load(getRequirements, "xrGetOpenGLGraphicsRequirementsKHR") ||
++        !Load(createSession, "xrCreateSession") || !Load(createReferenceSpace, "xrCreateReferenceSpace") ||
++        !Load(mPollEvent, "xrPollEvent") || !Load(mBeginSession, "xrBeginSession") ||
++        !Load(mEndSession, "xrEndSession") || !Load(mWaitFrame, "xrWaitFrame") ||
++        !Load(mBeginFrame, "xrBeginFrame") || !Load(mEndFrame, "xrEndFrame") ||
++        !Load(mCreateSwapchain, "xrCreateSwapchain") || !Load(mDestroySwapchain, "xrDestroySwapchain") ||
++        !Load(mEnumerateSwapchainImages, "xrEnumerateSwapchainImages") ||
++        !Load(mAcquireSwapchainImage, "xrAcquireSwapchainImage") ||
++        !Load(mWaitSwapchainImage, "xrWaitSwapchainImage") ||
++        !Load(mReleaseSwapchainImage, "xrReleaseSwapchainImage") ||
++        !Load(mCreateActionSet, "xrCreateActionSet") || !Load(mCreateAction, "xrCreateAction") ||
++        !Load(mSuggestBindings, "xrSuggestInteractionProfileBindings") ||
++        !Load(mAttachActionSets, "xrAttachSessionActionSets") || !Load(mSyncActions, "xrSyncActions") ||
++        !Load(mGetBoolean, "xrGetActionStateBoolean") || !Load(mGetFloat, "xrGetActionStateFloat") ||
++        !Load(mGetVector2f, "xrGetActionStateVector2f")) {
++        return false;
++    }
++
++    XrSystemGetInfo systemInfo{ XR_TYPE_SYSTEM_GET_INFO };
++    systemInfo.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
++    if (!Check(getSystem(mInstance, &systemInfo, &mSystem), "xrGetSystem")) {
++        return false;
++    }
++    XrGraphicsRequirementsOpenGLKHR requirements{ XR_TYPE_GRAPHICS_REQUIREMENTS_OPENGL_KHR };
++    if (!Check(getRequirements(mInstance, mSystem, &requirements), "xrGetOpenGLGraphicsRequirementsKHR")) {
++        return false;
++    }
++
++    XrGraphicsBindingOpenGLXlibKHR binding{ XR_TYPE_GRAPHICS_BINDING_OPENGL_XLIB_KHR };
++    binding.xDisplay = display;
++    binding.visualid = visualId;
++    binding.glxFBConfig = fbConfig;
++    binding.glxDrawable = drawable;
++    binding.glxContext = context;
++    XrSessionCreateInfo sessionInfo{ XR_TYPE_SESSION_CREATE_INFO };
++    sessionInfo.next = &binding;
++    sessionInfo.systemId = mSystem;
++    if (!Check(createSession(mInstance, &sessionInfo, &mSession), "xrCreateSession")) {
++        return false;
++    }
++
++    XrReferenceSpaceCreateInfo spaceInfo{ XR_TYPE_REFERENCE_SPACE_CREATE_INFO };
++    spaceInfo.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
++    spaceInfo.poseInReferenceSpace.orientation.w = 1.0f;
++    if (!Check(createReferenceSpace(mSession, &spaceInfo, &mSpace), "xrCreateReferenceSpace")) {
++        return false;
++    }
++
++    if (!CreatePad()) {
++        SPDLOG_WARN("Frame 3D: no OpenXR controller input; relying on Steam's gamepad");
++    }
++    SPDLOG_INFO("Frame 3D: OpenXR session created (Frame controller profile: {})", mFrameProfile ? "yes" : "no");
++    return true;
++}
++
++bool Headset::CreatePad() {
++    XrActionSetCreateInfo setInfo{ XR_TYPE_ACTION_SET_CREATE_INFO };
++    std::strcpy(setInfo.actionSetName, "gamepad");
++    std::strcpy(setInfo.localizedActionSetName, "Gamepad");
++    if (!Check(mCreateActionSet(mInstance, &setInfo, &mPad.set), "xrCreateActionSet")) {
++        return false;
++    }
++    auto make = [&](XrAction& action, const char* name, XrActionType type) {
++        XrActionCreateInfo info{ XR_TYPE_ACTION_CREATE_INFO };
++        std::strncpy(info.actionName, name, XR_MAX_ACTION_NAME_SIZE);
++        std::strncpy(info.localizedActionName, name, XR_MAX_LOCALIZED_ACTION_NAME_SIZE);
++        info.actionType = type;
++        return Check(mCreateAction(mPad.set, &info, &action), "xrCreateAction");
++    };
++    static const char* const kButtonNames[SDL_CONTROLLER_BUTTON_MAX] = {
++        "a", "b", "x", "y", "back", "guide", "start", "left_stick", "right_stick", "left_shoulder", "right_shoulder",
++        "dpad_up", "dpad_down", "dpad_left", "dpad_right",
++    };
++    bool ok = make(mPad.leftStick, "left_stick_move", XR_ACTION_TYPE_VECTOR2F_INPUT) &&
++              make(mPad.rightStick, "right_stick_move", XR_ACTION_TYPE_VECTOR2F_INPUT) &&
++              make(mPad.leftTrigger, "left_trigger", XR_ACTION_TYPE_FLOAT_INPUT) &&
++              make(mPad.rightTrigger, "right_trigger", XR_ACTION_TYPE_FLOAT_INPUT) &&
++              make(mPad.leftGrip, "left_grip", XR_ACTION_TYPE_FLOAT_INPUT) &&
++              make(mPad.rightGrip, "right_grip", XR_ACTION_TYPE_FLOAT_INPUT);
++    for (int button = 0; ok && button <= SDL_CONTROLLER_BUTTON_DPAD_RIGHT; button++) {
++        if (button != SDL_CONTROLLER_BUTTON_GUIDE) {
++            ok = make(mPad.buttons[button], kButtonNames[button], XR_ACTION_TYPE_BOOLEAN_INPUT);
++        }
++    }
++    if (!ok) {
++        return false;
++    }
++
++    if (mFrameProfile) {
++        SuggestPadBindings("/interaction_profiles/valve/frame_controller_valve", true);
++        // The profile's name before SteamVR 2.15.1.
++        SuggestPadBindings("/interaction_profiles/valve/frame_controller", true);
++    }
++    SuggestPadBindings("/interaction_profiles/oculus/touch_controller", false);
++
++    XrSessionActionSetsAttachInfo attachInfo{ XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO };
++    attachInfo.countActionSets = 1;
++    attachInfo.actionSets = &mPad.set;
++    if (!Check(mAttachActionSets(mSession, &attachInfo), "xrAttachSessionActionSets")) {
++        return false;
++    }
++
++    // A gamepad with the standard layout: buttons and axes in SDL_GameController order.
++    const int index = SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_GAMECONTROLLER, SDL_CONTROLLER_AXIS_MAX,
++                                                SDL_CONTROLLER_BUTTON_DPAD_RIGHT + 1, 0);
++    if (index < 0 || (mPad.joystick = SDL_JoystickOpen(index)) == nullptr) {
++        return Fail(std::string("can't create the virtual gamepad: ") + SDL_GetError());
++    }
++    return true;
++}
++
++void Headset::SuggestPadBindings(const char* profile, bool frameProfile) {
++    std::vector<XrActionSuggestedBinding> bindings;
++    auto bind = [&](XrAction action, const char* path) {
++        if (action != XR_NULL_HANDLE) {
++            bindings.push_back({ action, Path(path) });
++        }
++    };
++    bind(mPad.leftStick, "/user/hand/left/input/thumbstick");
++    bind(mPad.rightStick, "/user/hand/right/input/thumbstick");
++    bind(mPad.leftTrigger, "/user/hand/left/input/trigger/value");
++    bind(mPad.rightTrigger, "/user/hand/right/input/trigger/value");
++    bind(mPad.leftGrip, "/user/hand/left/input/squeeze/value");
++    bind(mPad.rightGrip, "/user/hand/right/input/squeeze/value");
++    bind(mPad.buttons[SDL_CONTROLLER_BUTTON_A], "/user/hand/right/input/a/click");
++    bind(mPad.buttons[SDL_CONTROLLER_BUTTON_B], "/user/hand/right/input/b/click");
++    bind(mPad.buttons[SDL_CONTROLLER_BUTTON_LEFTSTICK], "/user/hand/left/input/thumbstick/click");
++    bind(mPad.buttons[SDL_CONTROLLER_BUTTON_RIGHTSTICK], "/user/hand/right/input/thumbstick/click");
++    if (frameProfile) {
++        // The Frame controllers are a split gamepad: ABXY and Menu on the right, the D-pad and View on the
++        // left, a bumper on each.
++        bind(mPad.buttons[SDL_CONTROLLER_BUTTON_X], "/user/hand/right/input/x/click");
++        bind(mPad.buttons[SDL_CONTROLLER_BUTTON_Y], "/user/hand/right/input/y/click");
++        bind(mPad.buttons[SDL_CONTROLLER_BUTTON_START], "/user/hand/right/input/menu/click");
++        bind(mPad.buttons[SDL_CONTROLLER_BUTTON_BACK], "/user/hand/left/input/view/click");
++        bind(mPad.buttons[SDL_CONTROLLER_BUTTON_LEFTSHOULDER], "/user/hand/left/input/bumper/click");
++        bind(mPad.buttons[SDL_CONTROLLER_BUTTON_RIGHTSHOULDER], "/user/hand/right/input/bumper/click");
++        bind(mPad.buttons[SDL_CONTROLLER_BUTTON_DPAD_UP], "/user/hand/left/input/dpad_up/click");
++        bind(mPad.buttons[SDL_CONTROLLER_BUTTON_DPAD_DOWN], "/user/hand/left/input/dpad_down/click");
++        bind(mPad.buttons[SDL_CONTROLLER_BUTTON_DPAD_LEFT], "/user/hand/left/input/dpad_left/click");
++        bind(mPad.buttons[SDL_CONTROLLER_BUTTON_DPAD_RIGHT], "/user/hand/left/input/dpad_right/click");
++    } else {
++        bind(mPad.buttons[SDL_CONTROLLER_BUTTON_X], "/user/hand/left/input/x/click");
++        bind(mPad.buttons[SDL_CONTROLLER_BUTTON_Y], "/user/hand/left/input/y/click");
++        bind(mPad.buttons[SDL_CONTROLLER_BUTTON_START], "/user/hand/left/input/menu/click");
++    }
++    XrInteractionProfileSuggestedBinding suggestion{ XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING };
++    suggestion.interactionProfile = Path(profile);
++    suggestion.countSuggestedBindings = static_cast<uint32_t>(bindings.size());
++    suggestion.suggestedBindings = bindings.data();
++    const XrResult result = mSuggestBindings(mInstance, &suggestion);
++    if (XR_FAILED(result)) {
++        SPDLOG_INFO("Frame 3D: bindings for {} not accepted ({})", profile, static_cast<int>(result));
++    }
++}
++
++void Headset::UpdatePad() {
++    if (mPad.joystick == nullptr) {
++        return;
++    }
++    XrActiveActionSet active{ mPad.set, XR_NULL_PATH };
++    XrActionsSyncInfo syncInfo{ XR_TYPE_ACTIONS_SYNC_INFO };
++    syncInfo.countActiveActionSets = 1;
++    syncInfo.activeActionSets = &active;
++    if (XR_FAILED(mSyncActions(mSession, &syncInfo))) {
++        return;
++    }
++    auto getInfo = [](XrAction action) {
++        XrActionStateGetInfo info{ XR_TYPE_ACTION_STATE_GET_INFO };
++        info.action = action;
++        return info;
++    };
++    auto boolean = [&](XrAction action) {
++        XrActionStateBoolean state{ XR_TYPE_ACTION_STATE_BOOLEAN };
++        const XrActionStateGetInfo info = getInfo(action);
++        return action != XR_NULL_HANDLE && XR_SUCCEEDED(mGetBoolean(mSession, &info, &state)) && state.isActive &&
++               state.currentState;
++    };
++    auto value = [&](XrAction action) {
++        XrActionStateFloat state{ XR_TYPE_ACTION_STATE_FLOAT };
++        const XrActionStateGetInfo info = getInfo(action);
++        return XR_SUCCEEDED(mGetFloat(mSession, &info, &state)) && state.isActive ? state.currentState : 0.0f;
++    };
++    auto stick = [&](XrAction action) {
++        XrActionStateVector2f state{ XR_TYPE_ACTION_STATE_VECTOR2F };
++        const XrActionStateGetInfo info = getInfo(action);
++        return XR_SUCCEEDED(mGetVector2f(mSession, &info, &state)) && state.isActive ? state.currentState
++                                                                                      : XrVector2f{ 0.0f, 0.0f };
++    };
++    auto axis = [](float v) { return static_cast<Sint16>(std::lround(std::fmax(-1.0f, std::fmin(1.0f, v)) * 32767.0f)); };
++    // Triggers: released is the bottom of the axis range, so both of SDL's trigger conventions read 0.
++    auto trigger = [](float v) {
++        return static_cast<Sint16>(std::lround(std::fmax(0.0f, std::fmin(1.0f, v)) * 65535.0f) - 32768);
++    };
++
++    const XrVector2f left = stick(mPad.leftStick), right = stick(mPad.rightStick);
++    SDL_JoystickSetVirtualAxis(mPad.joystick, SDL_CONTROLLER_AXIS_LEFTX, axis(left.x));
++    SDL_JoystickSetVirtualAxis(mPad.joystick, SDL_CONTROLLER_AXIS_LEFTY, axis(-left.y));
++    SDL_JoystickSetVirtualAxis(mPad.joystick, SDL_CONTROLLER_AXIS_RIGHTX, axis(right.x));
++    SDL_JoystickSetVirtualAxis(mPad.joystick, SDL_CONTROLLER_AXIS_RIGHTY, axis(-right.y));
++    SDL_JoystickSetVirtualAxis(mPad.joystick, SDL_CONTROLLER_AXIS_TRIGGERLEFT, trigger(value(mPad.leftTrigger)));
++    SDL_JoystickSetVirtualAxis(mPad.joystick, SDL_CONTROLLER_AXIS_TRIGGERRIGHT, trigger(value(mPad.rightTrigger)));
++
++    bool pressed[SDL_CONTROLLER_BUTTON_DPAD_RIGHT + 1];
++    for (int button = 0; button <= SDL_CONTROLLER_BUTTON_DPAD_RIGHT; button++) {
++        pressed[button] = boolean(mPad.buttons[button]);
++    }
++
++    // Grips aren't on the gamepad, so they adjust the 3D screen: left grip + D-pad up/down changes the
++    // depth and left/right the focus distance; right grip + D-pad up/down the screen size and left/right
++    // its distance. The D-pad doesn't reach the game while a grip is held.
++    const bool leftGrip = value(mPad.leftGrip) > 0.6f, rightGrip = value(mPad.rightGrip) > 0.6f;
++    const int dpad[4] = { SDL_CONTROLLER_BUTTON_DPAD_UP, SDL_CONTROLLER_BUTTON_DPAD_DOWN,
++                          SDL_CONTROLLER_BUTTON_DPAD_LEFT, SDL_CONTROLLER_BUTTON_DPAD_RIGHT };
++    if (leftGrip || rightGrip) {
++        bool changed = false;
++        for (int i = 0; i < 4; i++) {
++            const bool down = pressed[dpad[i]];
++            if (down && !mPad.lastDpad[i]) {
++                const float up = (i == 0 || i == 3) ? 1.0f : -1.0f;
++                if (leftGrip && i < 2) {
++                    CVars()->SetFloat("gFrame3D.Depth", std::fmax(0.0f, std::fmin(4.0f, Depth() + 0.25f * up)));
++                } else if (leftGrip) {
++                    CVars()->SetFloat("gFrame3D.Focus",
++                                      std::fmax(50.0f, std::fmin(5000.0f, Focus() * (up > 0 ? 1.25f : 0.8f))));
++                } else if (i < 2) {
++                    CVars()->SetFloat("gFrame3D.ScreenWidth",
++                                      std::fmax(0.5f, std::fmin(10.0f, ScreenWidth() * (up > 0 ? 1.1f : 1 / 1.1f))));
++                } else {
++                    CVars()->SetFloat("gFrame3D.Distance",
++                                      std::fmax(0.5f, std::fmin(10.0f, ScreenDistance() + 0.25f * up)));
++                }
++                changed = true;
++            }
++            mPad.lastDpad[i] = down;
++            pressed[dpad[i]] = false;
++        }
++        if (changed) {
++            SPDLOG_INFO("Frame 3D: depth {:.2f}, focus {:.0f}, screen {:.2f} m at {:.2f} m", Depth(), Focus(),
++                        ScreenWidth(), ScreenDistance());
++            CVars()->Save();
++        }
++    } else {
++        for (int i = 0; i < 4; i++) {
++            mPad.lastDpad[i] = pressed[dpad[i]];
++        }
++    }
++
++    for (int button = 0; button <= SDL_CONTROLLER_BUTTON_DPAD_RIGHT; button++) {
++        SDL_JoystickSetVirtualButton(mPad.joystick, button, pressed[button] ? 1 : 0);
++    }
++}
++
++void Headset::PollEvents() {
++    XrEventDataBuffer event{ XR_TYPE_EVENT_DATA_BUFFER };
++    while (mPollEvent(mInstance, &event) == XR_SUCCESS) {
++        if (event.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
++            mState = reinterpret_cast<XrEventDataSessionStateChanged*>(&event)->state;
++            SPDLOG_INFO("Frame 3D: session state {}", static_cast<int>(mState));
++            if (mState == XR_SESSION_STATE_READY && !mRunning) {
++                XrSessionBeginInfo beginInfo{ XR_TYPE_SESSION_BEGIN_INFO };
++                beginInfo.primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
++                mRunning = Check(mBeginSession(mSession, &beginInfo), "xrBeginSession");
++            } else if (mState == XR_SESSION_STATE_STOPPING && mRunning) {
++                mEndSession(mSession);
++                mRunning = false;
++            } else if (mState == XR_SESSION_STATE_EXITING || mState == XR_SESSION_STATE_LOSS_PENDING) {
++                // SteamVR closed the game (e.g. Exit in the dashboard).
++                SDL_Event quit{};
++                quit.type = SDL_QUIT;
++                SDL_PushEvent(&quit);
++            }
++        } else if (event.type == XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING) {
++            SDL_Event quit{};
++            quit.type = SDL_QUIT;
++            SDL_PushEvent(&quit);
++        }
++        event = { XR_TYPE_EVENT_DATA_BUFFER };
++    }
++}
++
++bool Headset::EnsureTargets(int width, int height) {
++    if (width == mWidth && height == mHeight && mSwapchain != XR_NULL_HANDLE) {
++        return true;
++    }
++    if (mSwapchain != XR_NULL_HANDLE) {
++        mDestroySwapchain(mSwapchain);
++        mSwapchain = XR_NULL_HANDLE;
++    }
++    if (mFormat == 0) {
++        PFN_xrEnumerateSwapchainFormats enumerateFormats = nullptr;
++        if (!Load(enumerateFormats, "xrEnumerateSwapchainFormats")) {
++            return false;
++        }
++        uint32_t count = 0;
++        enumerateFormats(mSession, 0, &count, nullptr);
++        std::vector<int64_t> formats(count);
++        enumerateFormats(mSession, count, &count, formats.data());
++        for (int64_t format : formats) {
++            if (format == GL_RGBA8 || (mFormat == 0 && format == GL_SRGB8_ALPHA8)) {
++                mFormat = format;
++            }
++        }
++        if (mFormat == 0) {
++            return Fail("the runtime offers no RGBA8 swapchain");
++        }
++    }
++    // Both eyes side by side in one image.
++    XrSwapchainCreateInfo info{ XR_TYPE_SWAPCHAIN_CREATE_INFO };
++    info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT |
++                      XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
++    info.format = mFormat;
++    info.sampleCount = 1;
++    info.width = static_cast<uint32_t>(width * 2);
++    info.height = static_cast<uint32_t>(height);
++    info.faceCount = 1;
++    info.arraySize = 1;
++    info.mipCount = 1;
++    if (!Check(mCreateSwapchain(mSession, &info, &mSwapchain), "xrCreateSwapchain")) {
++        return false;
++    }
++    uint32_t count = 0;
++    mEnumerateSwapchainImages(mSwapchain, 0, &count, nullptr);
++    mImages.assign(count, { XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR });
++    mEnumerateSwapchainImages(mSwapchain, count, &count,
++                              reinterpret_cast<XrSwapchainImageBaseHeader*>(mImages.data()));
++
++    if (mBlitFbo == 0) {
++        glGenFramebuffers(2, mEyeFbos);
++        glGenFramebuffers(1, &mBlitFbo);
++        glGenTextures(2, mEyeTextures);
++    }
++    GLint previousTexture = 0, previousFramebuffer = 0;
++    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
++    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFramebuffer);
++    for (int eye = 0; eye < 2; eye++) {
++        glBindTexture(GL_TEXTURE_2D, mEyeTextures[eye]);
++        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
++        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
++        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
++        glBindFramebuffer(GL_FRAMEBUFFER, mEyeFbos[eye]);
++        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, mEyeTextures[eye], 0);
++    }
++    glBindTexture(GL_TEXTURE_2D, previousTexture);
++    glBindFramebuffer(GL_FRAMEBUFFER, previousFramebuffer);
++    mWidth = width;
++    mHeight = height;
++    SPDLOG_INFO("Frame 3D: {}x{} per eye, {} swapchain images", width, height, count);
++    return true;
++}
++
++bool Headset::Present(ImDrawData* drawData) {
++    PollEvents();
++    mPresenting = false;
++    if (!mRunning) {
++        return false;
++    }
++
++    XrFrameState frameState{ XR_TYPE_FRAME_STATE };
++    XrFrameWaitInfo waitInfo{ XR_TYPE_FRAME_WAIT_INFO };
++    if (!Check(mWaitFrame(mSession, &waitInfo, &frameState), "xrWaitFrame")) {
++        return false;
++    }
++    XrFrameBeginInfo beginInfo{ XR_TYPE_FRAME_BEGIN_INFO };
++    if (!Check(mBeginFrame(mSession, &beginInfo), "xrBeginFrame")) {
++        return false;
++    }
++    mPresenting = true;
++    UpdatePad();
++
++    XrFrameEndInfo endInfo{ XR_TYPE_FRAME_END_INFO };
++    endInfo.displayTime = frameState.predictedDisplayTime;
++    endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
++    XrCompositionLayerQuad quads[2] = { { XR_TYPE_COMPOSITION_LAYER_QUAD }, { XR_TYPE_COMPOSITION_LAYER_QUAD } };
++    const XrCompositionLayerBaseHeader* layers[2] = {
++        reinterpret_cast<XrCompositionLayerBaseHeader*>(&quads[0]),
++        reinterpret_cast<XrCompositionLayerBaseHeader*>(&quads[1]),
++    };
++
++    const int width = static_cast<int>(drawData->DisplaySize.x * drawData->FramebufferScale.x);
++    const int height = static_cast<int>(drawData->DisplaySize.y * drawData->FramebufferScale.y);
++    if (frameState.shouldRender && width > 0 && height > 0 && EnsureTargets(width, height)) {
++        GLint previousFramebuffer = 0;
++        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFramebuffer);
++
++        // The whole window (game and menus) once per eye; the right eye's game image samples the right half
++        // of the side-by-side framebuffer.
++        for (int eye = 0; eye < 2; eye++) {
++            glBindFramebuffer(GL_FRAMEBUFFER, mEyeFbos[eye]);
++            glDisable(GL_SCISSOR_TEST);
++            glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
++            glClear(GL_COLOR_BUFFER_BIT);
++            ShiftGameImage(eye == 1 ? 0.5f : 0.0f);
++            ImGui_ImplOpenGL3_RenderDrawData(drawData);
++            ShiftGameImage(eye == 1 ? -0.5f : 0.0f);
++        }
++
++        uint32_t imageIndex = 0;
++        XrSwapchainImageAcquireInfo acquireInfo{ XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO };
++        XrSwapchainImageWaitInfo imageWaitInfo{ XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO };
++        imageWaitInfo.timeout = XR_INFINITE_DURATION;
++        if (Check(mAcquireSwapchainImage(mSwapchain, &acquireInfo, &imageIndex), "xrAcquireSwapchainImage") &&
++            imageIndex < mImages.size()) {
++            mWaitSwapchainImage(mSwapchain, &imageWaitInfo);
++            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, mBlitFbo);
++            glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, mImages[imageIndex].image,
++                                   0);
++            for (int eye = 0; eye < 2; eye++) {
++                glBindFramebuffer(GL_READ_FRAMEBUFFER, mEyeFbos[eye]);
++                glBlitFramebuffer(0, 0, width, height, eye * width, 0, eye * width + width, height,
++                                  GL_COLOR_BUFFER_BIT, GL_NEAREST);
++            }
++            XrSwapchainImageReleaseInfo releaseInfo{ XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
++            mReleaseSwapchainImage(mSwapchain, &releaseInfo);
++
++            const float screenWidth = ScreenWidth();
++            for (int eye = 0; eye < 2; eye++) {
++                XrCompositionLayerQuad& quad = quads[eye];
++                quad.space = mSpace;
++                quad.eyeVisibility = eye == 0 ? XR_EYE_VISIBILITY_LEFT : XR_EYE_VISIBILITY_RIGHT;
++                quad.subImage.swapchain = mSwapchain;
++                quad.subImage.imageRect = { { eye * width, 0 }, { width, height } };
++                quad.pose.orientation.w = 1.0f;
++                quad.pose.position = { 0.0f, 0.0f, -ScreenDistance() };
++                quad.size = { screenWidth, screenWidth * height / width };
++            }
++            endInfo.layerCount = 2;
++            endInfo.layers = layers;
++        }
++        glBindFramebuffer(GL_FRAMEBUFFER, previousFramebuffer);
++    }
++    Check(mEndFrame(mSession, &endInfo), "xrEndFrame");
++    return true;
++}
++
++Headset* sHeadset = nullptr;
++
++#endif // FRAME_STEREO_XR
++
++} // namespace
++
++bool RenderStereo() {
++    return sMode == Mode::SideBySide || (sMode == Mode::Headset && !sHeadsetFailed);
++}
++
++float Separation() {
++    return kBaseSeparation * Depth();
++}
++
++float Convergence() {
++    return Focus();
++}
++
++void DrawGameImage(void* texture, const ImVec2& size) {
++    ImDrawList* list = ImGui::GetWindowDrawList();
++    const int begin = list->VtxBuffer.Size;
++    const float right = sMode == Mode::Headset ? 0.5f : 1.0f;
++    ImGui::Image(reinterpret_cast<ImTextureID>(texture), size, ImVec2(0.0f, 0.0f), ImVec2(right, 1.0f));
++    sGameImageList = list;
++    sGameImageVtxBegin = begin;
++    sGameImageVtxEnd = list->VtxBuffer.Size;
++}
++
++bool Present(ImDrawData* drawData) {
++#ifdef FRAME_STEREO_XR
++    if (sMode != Mode::Headset || sHeadsetFailed) {
++        sGameImageList = nullptr;
++        return false;
++    }
++    if (sHeadset == nullptr) {
++        sHeadset = new Headset();
++        if (!sHeadset->Init()) {
++            SPDLOG_ERROR("Frame 3D: the headset can't be used; showing the game flat");
++            sHeadsetFailed = true;
++            sGameImageList = nullptr;
++            return false;
++        }
++    }
++    const bool presented = sHeadset->Present(drawData);
++    sGameImageList = nullptr;
++    return presented;
++#else
++    sGameImageList = nullptr;
++    return false;
++#endif
++}
++
++bool PresentsToHeadset() {
++#ifdef FRAME_STEREO_XR
++    return sHeadset != nullptr && sHeadset->Presenting();
++#else
++    return false;
++#endif
++}
++
++} // namespace Fast::FrameStereo
+diff --git a/src/fast/backends/gfx_opengl.cpp b/src/fast/backends/gfx_opengl.cpp
+index ad9b1dde..3ae4a31a 100644
+--- a/src/fast/backends/gfx_opengl.cpp
++++ b/src/fast/backends/gfx_opengl.cpp
+@@ -631,13 +631,51 @@ void GfxRenderingAPIOGL::SetZmodeDecal(bool zmode_decal) {
+ }
+ 
+ void GfxRenderingAPIOGL::SetViewport(int x, int y, int width, int height) {
++    mViewport[0] = x;
++    mViewport[1] = y;
++    mViewport[2] = width;
++    mViewport[3] = height;
+     glViewport(x, y, width, height);
+ }
+ 
+ void GfxRenderingAPIOGL::SetScissor(int x, int y, int width, int height) {
++    mScissor[0] = x;
++    mScissor[1] = y;
++    mScissor[2] = width;
++    mScissor[3] = height;
+     glScissor(x, y, width, height);
+ }
+ 
++void GfxRenderingAPIOGL::SetStereo(int fbId, float separation, float convergence) {
++    mStereoFb = fbId;
++    mStereoSeparation = separation;
++    mStereoConvergence = convergence;
++}
++
++// Draws the batch once per eye, the left eye in the left half of the framebuffer and the right eye in the
++// right half. Each vertex moves by half the separation times (w - convergence): things at the convergence
++// distance stay put, nearer ones come out of the screen and farther ones go into it. 2D elements (w == 1:
++// the HUD, text, rectangles) stay on the screen plane.
++void GfxRenderingAPIOGL::DrawStereo(float buf_vbo[], size_t buf_vbo_len, size_t buf_vbo_num_tris) {
++    const size_t stride = buf_vbo_len / (3 * buf_vbo_num_tris);
++    const GLint eyeWidth = (GLint)mFrameBuffers[mCurrentFrameBuffer].width;
++    mStereoVbo.assign(buf_vbo, buf_vbo + buf_vbo_len);
++    for (int eye = 0; eye < 2; eye++) {
++        const float shift = (eye == 0 ? -0.5f : 0.5f) * mStereoSeparation;
++        for (size_t i = 0; i < buf_vbo_len; i += stride) {
++            const float w = buf_vbo[i + 3];
++            mStereoVbo[i] = w == 1.0f ? buf_vbo[i] : buf_vbo[i] + shift * (w - mStereoConvergence);
++        }
++        const GLint dx = eye * eyeWidth;
++        glViewport(mViewport[0] + dx, mViewport[1], mViewport[2], mViewport[3]);
++        glScissor(mScissor[0] + dx, mScissor[1], mScissor[2], mScissor[3]);
++        glBufferData(GL_ARRAY_BUFFER, sizeof(float) * buf_vbo_len, mStereoVbo.data(), GL_STREAM_DRAW);
++        glDrawArrays(GL_TRIANGLES, 0, 3 * buf_vbo_num_tris);
++    }
++    glViewport(mViewport[0], mViewport[1], mViewport[2], mViewport[3]);
++    glScissor(mScissor[0], mScissor[1], mScissor[2], mScissor[3]);
++}
++
+ void GfxRenderingAPIOGL::SetUseAlpha(bool use_alpha) {
+     int8_t val = use_alpha ? 1 : 0;
+     if (mLastBlendEnabled != val) {
+@@ -703,6 +741,10 @@ void GfxRenderingAPIOGL::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, size
+     SetPerDrawUniforms();
+ 
+     // printf("flushing %d tris\n", buf_vbo_num_tris);
++    if (IsStereo((int)mCurrentFrameBuffer)) {
++        DrawStereo(buf_vbo, buf_vbo_len, buf_vbo_num_tris);
++        return;
++    }
+     glBufferData(GL_ARRAY_BUFFER, sizeof(float) * buf_vbo_len, buf_vbo, GL_STREAM_DRAW);
+     glDrawArrays(GL_TRIANGLES, 0, 3 * buf_vbo_num_tris);
+ }
+@@ -798,30 +840,34 @@ void GfxRenderingAPIOGL::UpdateFramebufferParameters(int fb_id, uint32_t width,
+     height = std::max(height, 1U);
+     msaa_level = std::min(msaa_level, (uint32_t)mMaxMsaaLevel);
+ 
++    const uint32_t alloc_width = IsStereo(fb_id) ? width * 2 : width;
++
+     glBindFramebuffer(GL_FRAMEBUFFER, fb.fbo);
+ 
+     if (fb_id != 0) {
+-        if (fb.width != width || fb.height != height || fb.msaa_level != msaa_level) {
++        if (fb.alloc_width != alloc_width || fb.height != height || fb.msaa_level != msaa_level) {
+             if (msaa_level <= 1) {
+                 glBindTexture(GL_TEXTURE_2D, fb.clrbuf);
+-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
++                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, alloc_width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
+                 glBindTexture(GL_TEXTURE_2D, 0);
+                 glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fb.clrbuf, 0);
+             } else {
+                 glBindRenderbuffer(GL_RENDERBUFFER, fb.clrbufMsaa);
+-                glRenderbufferStorageMultisample(GL_RENDERBUFFER, msaa_level, GL_RGB8, width, height);
++                glRenderbufferStorageMultisample(GL_RENDERBUFFER, msaa_level, GL_RGB8, alloc_width, height);
+                 glBindRenderbuffer(GL_RENDERBUFFER, 0);
+                 glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, fb.clrbufMsaa);
+             }
+         }
+ 
+         if (has_depth_buffer &&
+-            (fb.width != width || fb.height != height || fb.msaa_level != msaa_level || !fb.has_depth_buffer)) {
++            (fb.alloc_width != alloc_width || fb.height != height || fb.msaa_level != msaa_level ||
++             !fb.has_depth_buffer)) {
+             glBindRenderbuffer(GL_RENDERBUFFER, fb.rbo);
+             if (msaa_level <= 1) {
+-                glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
++                glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, alloc_width, height);
+             } else {
+-                glRenderbufferStorageMultisample(GL_RENDERBUFFER, msaa_level, GL_DEPTH24_STENCIL8, width, height);
++                glRenderbufferStorageMultisample(GL_RENDERBUFFER, msaa_level, GL_DEPTH24_STENCIL8, alloc_width,
++                                                 height);
+             }
+             glBindRenderbuffer(GL_RENDERBUFFER, 0);
+         }
+@@ -834,6 +880,7 @@ void GfxRenderingAPIOGL::UpdateFramebufferParameters(int fb_id, uint32_t width,
+     }
+ 
+     fb.width = width;
++    fb.alloc_width = alloc_width;
+     fb.height = height;
+     fb.has_depth_buffer = has_depth_buffer;
+     fb.msaa_level = msaa_level;
+@@ -875,6 +922,10 @@ void GfxRenderingAPIOGL::ClearDepthRegion(int x, int y, int w, int h) {
+     glScissor(x, y, w, h);
+     glDepthMask(GL_TRUE);
+     glClear(GL_DEPTH_BUFFER_BIT);
++    if (IsStereo((int)mCurrentFrameBuffer)) {
++        glScissor(x + (GLint)mFrameBuffers[mCurrentFrameBuffer].width, y, w, h);
++        glClear(GL_DEPTH_BUFFER_BIT);
++    }
+     glDepthMask(mCurrentDepthMask ? GL_TRUE : GL_FALSE);
+ 
+     // Restore previous scissor state.
+@@ -896,8 +947,8 @@ void GfxRenderingAPIOGL::ResolveMSAAColorBuffer(int fb_id_target, int fb_id_sour
+         glDisable(GL_SCISSOR_TEST);
+     }
+ 
+-    glBlitFramebuffer(0, 0, fb_src.width, fb_src.height, 0, 0, fb_dst.width, fb_dst.height, GL_COLOR_BUFFER_BIT,
+-                      GL_NEAREST);
++    glBlitFramebuffer(0, 0, fb_src.alloc_width, fb_src.height, 0, 0, fb_dst.alloc_width, fb_dst.height,
++                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+     glBindFramebuffer(GL_FRAMEBUFFER, mCurrentFrameBuffer);
+ 
+     if (mLastScissorEnabled != 1) {
+diff --git a/src/fast/backends/gfx_sdl2.cpp b/src/fast/backends/gfx_sdl2.cpp
+index 15c5415f..ab7d7ee5 100644
+--- a/src/fast/backends/gfx_sdl2.cpp
++++ b/src/fast/backends/gfx_sdl2.cpp
+@@ -3,6 +3,7 @@
+ #include <stdio.h>
+ 
+ #include "fast/Fast3dWindow.h"
++#include "fast/FrameStereo.h"
+ 
+ #ifdef __MINGW32__
+ #define FOR_WINDOWS 1
+@@ -747,7 +748,10 @@ void GfxWindowBackendSDL2::SwapBuffersBegin() {
+     }
+ 
+     SyncFramerateWithTime();
+-    SDL_GL_SwapWindow(mWnd);
++    // In 3D mode the frame went to the headset; the window isn't shown.
++    if (!FrameStereo::PresentsToHeadset()) {
++        SDL_GL_SwapWindow(mWnd);
++    }
+ }
+ 
+ void GfxWindowBackendSDL2::SwapBuffersEnd() {
+diff --git a/src/fast/interpreter.cpp b/src/fast/interpreter.cpp
+index 2b51ad7f..5a4c2cd9 100644
+--- a/src/fast/interpreter.cpp
++++ b/src/fast/interpreter.cpp
+@@ -28,6 +28,7 @@
+ #include <string>
+ 
+ #include "fast/interpreter.h"
++#include "fast/FrameStereo.h"
+ #include "fast/lus_gbi.h"
+ #include "fast/backends/gfx_window_manager_api.h"
+ #include "fast/backends/gfx_rendering_api.h"
+@@ -5064,9 +5065,22 @@ void Interpreter::StartFrame() {
+ 
+     mPrvDimensions = mCurDimensions;
+     mPrevNativeDimensions = mNativeDimensions;
+-    if (!ViewportMatchesRendererResolution() || mMsaaLevel > 1) {
++
++    // Steam Frame 3D: the game goes to its own framebuffer, drawn side by side for both eyes. The eyes are
++    // drawn without MSAA (resolving would only keep the left eye).
++    const bool stereo = FrameStereo::RenderStereo();
++    if (stereo && mMsaaLevel > 1) {
++        mStereoSavedMsaaLevel = mMsaaLevel;
++        mMsaaLevel = 1;
++    } else if (!stereo && mStereoSavedMsaaLevel > 1) {
++        mMsaaLevel = mStereoSavedMsaaLevel;
++        mStereoSavedMsaaLevel = 0;
++    }
++    mRapi->SetStereo(stereo ? mGameFb : -1, FrameStereo::Separation(), FrameStereo::Convergence());
++
++    if (stereo || !ViewportMatchesRendererResolution() || mMsaaLevel > 1) {
+         mRendersToFb = true;
+-        if (!ViewportMatchesRendererResolution()) {
++        if (stereo || !ViewportMatchesRendererResolution()) {
+             mRapi->UpdateFramebufferParameters(mGameFb, mCurDimensions.width, mCurDimensions.height, mMsaaLevel, true,
+                                                true, true, true);
+         } else {
