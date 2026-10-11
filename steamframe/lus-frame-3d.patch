@@ -143,10 +143,10 @@ index 237a502a..74b25cca 100644
      ImGui::End();
 diff --git a/src/fast/FrameStereo.cpp b/src/fast/FrameStereo.cpp
 new file mode 100644
-index 00000000..fee63918
+index 00000000..c8a96216
 --- /dev/null
 +++ b/src/fast/FrameStereo.cpp
-@@ -0,0 +1,775 @@
+@@ -0,0 +1,794 @@
 +// Steam Frame 3D mode (see FrameStereo.h).
 +//
 +// The renderer (gfx_opengl) draws the game twice into a double-width framebuffer, once per eye. Here the
@@ -347,27 +347,46 @@ index 00000000..fee63918
 +    GLuint mEyeTextures[2] = {}, mEyeFbos[2] = {}, mBlitFbo = 0;
 +};
 +
++// GLX and Xlib functions come from the libraries SDL has loaded (the game links only libOpenGL), so they're
++// looked up rather than linked.
++template <typename T> T X11Function(const char* name) {
++    void* fn = dlsym(RTLD_DEFAULT, name);
++    if (fn == nullptr) {
++        fn = SDL_GL_GetProcAddress(name);
++    }
++    return reinterpret_cast<T>(fn);
++}
++
 +bool Headset::Init() {
-+    Display* display = glXGetCurrentDisplay();
-+    GLXContext context = glXGetCurrentContext();
-+    GLXDrawable drawable = glXGetCurrentDrawable();
++    const auto getCurrentDisplay = X11Function<Display* (*)()>("glXGetCurrentDisplay");
++    const auto getCurrentContext = X11Function<GLXContext (*)()>("glXGetCurrentContext");
++    const auto getCurrentDrawable = X11Function<GLXDrawable (*)()>("glXGetCurrentDrawable");
++    const auto queryContext = X11Function<int (*)(Display*, GLXContext, int, int*)>("glXQueryContext");
++    const auto chooseFbConfig = X11Function<GLXFBConfig* (*)(Display*, int, const int*, int*)>("glXChooseFBConfig");
++    const auto getVisualFromFbConfig = X11Function<XVisualInfo* (*)(Display*, GLXFBConfig)>("glXGetVisualFromFBConfig");
++    const auto xFree = X11Function<int (*)(void*)>("XFree");
++    if (!getCurrentDisplay || !getCurrentContext || !getCurrentDrawable || !queryContext || !chooseFbConfig ||
++        !getVisualFromFbConfig) {
++        return Fail("GLX isn't available (the game must run on X11 with desktop OpenGL)");
++    }
++    Display* display = getCurrentDisplay();
++    GLXContext context = getCurrentContext();
++    GLXDrawable drawable = getCurrentDrawable();
 +    if (display == nullptr || context == nullptr) {
 +        return Fail("no GLX context (the game must run on X11 with desktop OpenGL)");
 +    }
 +    int fbConfigId = 0;
-+    if (glXQueryContext(display, context, GLX_FBCONFIG_ID, &fbConfigId) != Success) {
++    if (queryContext(display, context, GLX_FBCONFIG_ID, &fbConfigId) != Success) {
 +        return Fail("glXQueryContext failed");
 +    }
 +    const int attributes[] = { GLX_FBCONFIG_ID, fbConfigId, None };
 +    int count = 0;
-+    GLXFBConfig* configs = glXChooseFBConfig(display, DefaultScreen(display), attributes, &count);
++    GLXFBConfig* configs = chooseFbConfig(display, DefaultScreen(display), attributes, &count);
 +    if (configs == nullptr || count < 1) {
 +        return Fail("no GLXFBConfig for the game's context");
 +    }
 +    GLXFBConfig fbConfig = configs[0];
-+    // XFree comes from libX11, which SDL has loaded; look it up rather than link it.
-+    auto xFree = reinterpret_cast<int (*)(void*)>(dlsym(RTLD_DEFAULT, "XFree"));
-+    XVisualInfo* visual = glXGetVisualFromFBConfig(display, fbConfig);
++    XVisualInfo* visual = getVisualFromFbConfig(display, fbConfig);
 +    const uint32_t visualId = visual != nullptr ? static_cast<uint32_t>(visual->visualid) : 0;
 +    if (xFree != nullptr) {
 +        xFree(configs);
