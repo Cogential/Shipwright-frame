@@ -2,6 +2,12 @@
 
 No ROM or ROM-derived files are included. You need your own Ocarina of Time ROM.
 
+### New in frame-3d-v0.1.1
+- **Black around the screen** instead of white (that also hides the dark specks at the edges of the lenses).
+- **Grab the screen like SteamVR's theater screen:** hold a **grip** and point or move that controller to drag
+  the screen around; hold **both grips** and pull your hands apart or together to make it bigger or smaller.
+  The screen always turns to face you, and stays where you leave it.
+
 ### Adjusting the 3D
 Hold a **grip** and press the **D-pad**:
 - Left grip + D-pad up/down: more or less depth.
@@ -9,9 +15,10 @@ Hold a **grip** and press the **D-pad**:
 - Right grip + D-pad up/down: bigger or smaller screen.
 - Right grip + D-pad left/right: screen farther or nearer.
 
-Settings are saved. Use SteamVR's recenter if the screen isn't in front of you.
+Pressing the D-pad during a grip hold adjusts instead of moving the screen. Settings are saved. Use
+SteamVR's recenter if the screen isn't in front of you.
 
-### Not tested on a headset yet
+### Notes
 - If the headset can't be used the game plays flat as usual, and the reason is in the log (`~/.local/share/soh/logs/`, lines starting `Frame 3D:`).
 - The controllers are read through OpenXR and given to the game as a gamepad, in case Steam's own gamepad stops while the game is a VR app.
 - MSAA is off in 3D mode.
