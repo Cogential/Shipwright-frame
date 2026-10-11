@@ -143,10 +143,10 @@ index 237a502a..74b25cca 100644
      ImGui::End();
 diff --git a/src/fast/FrameStereo.cpp b/src/fast/FrameStereo.cpp
 new file mode 100644
-index 00000000..c8a96216
+index 00000000..ce546e59
 --- /dev/null
 +++ b/src/fast/FrameStereo.cpp
-@@ -0,0 +1,794 @@
+@@ -0,0 +1,796 @@
 +// Steam Frame 3D mode (see FrameStereo.h).
 +//
 +// The renderer (gfx_opengl) draws the game twice into a double-width framebuffer, once per eye. Here the
@@ -204,17 +204,18 @@ index 00000000..c8a96216
 +// Set when the headset couldn't be used: the game then falls back to the normal flat picture.
 +bool sHeadsetFailed = false;
 +
-+// At Depth 1 the farthest things are this far apart between the eyes, in normalised device
-+// coordinates (2 = the screen's width). On a 3 m screen that is about 4.5 cm, under the eyes' spacing,
-+// so the background never makes the eyes diverge.
-+constexpr float kBaseSeparation = 0.03f;
++// At Depth 1 the farthest things are 4.5 cm apart between the eyes on the virtual screen, whatever its
++// size: under the eyes' spacing (about 6.3 cm), so the background never makes the eyes diverge. Depth is
++// capped so it stays under it.
++constexpr float kFarParallaxMeters = 0.045f;
++constexpr float kMaxDepth = 1.3f;
 +
 +Ship::ConsoleVariable* CVars() {
 +    return Ship::Context::GetRawInstance()->GetConsoleVariables().get();
 +}
 +
 +float Depth() {
-+    return CVars()->GetFloat("gFrame3D.Depth", 1.0f);
++    return std::fmax(0.0f, std::fmin(kMaxDepth, CVars()->GetFloat("gFrame3D.Depth", 1.0f)));
 +}
 +
 +float Focus() {
@@ -222,7 +223,7 @@ index 00000000..c8a96216
 +}
 +
 +float ScreenWidth() {
-+    return CVars()->GetFloat("gFrame3D.ScreenWidth", 3.0f);
++    return std::fmax(0.5f, CVars()->GetFloat("gFrame3D.ScreenWidth", 3.0f));
 +}
 +
 +float ScreenDistance() {
@@ -666,7 +667,7 @@ index 00000000..c8a96216
 +            if (down && !mPad.lastDpad[i]) {
 +                const float up = (i == 0 || i == 3) ? 1.0f : -1.0f;
 +                if (leftGrip && i < 2) {
-+                    CVars()->SetFloat("gFrame3D.Depth", std::fmax(0.0f, std::fmin(4.0f, Depth() + 0.25f * up)));
++                    CVars()->SetFloat("gFrame3D.Depth", std::fmax(0.0f, std::fmin(kMaxDepth, Depth() + 0.1f * up)));
 +                } else if (leftGrip) {
 +                    CVars()->SetFloat("gFrame3D.Focus",
 +                                      std::fmax(50.0f, std::fmin(5000.0f, Focus() * (up > 0 ? 1.25f : 0.8f))));
@@ -891,7 +892,8 @@ index 00000000..c8a96216
 +}
 +
 +float Separation() {
-+    return kBaseSeparation * Depth();
++    // Normalised device coordinates span 2 across the screen.
++    return 2.0f * kFarParallaxMeters * Depth() / ScreenWidth();
 +}
 +
 +float Convergence() {
